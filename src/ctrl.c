@@ -12,78 +12,184 @@
 #include <nvm_util.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <stdio.h>
-#include "device.h"
+#include "dev.h"
+#include "ctrl.h"
 #include "util.h"
 #include "regs.h"
 #include "dprintf.h"
 
 
-/* Forward declaration */
-struct bar_reference;
-
-
-#ifdef _SISCI
 /*
- * Reference to a PCI device in the cluster.
- *
- * This structure is used to hold a SmartIO reference to the physical 
- * controller.
+ * Controller device type.
+ * Indicates how we access the controller.
  */
-struct bar_reference
+enum device_type
 {
-    struct nvm_device       device;         // Device reference
-    sci_remote_segment_t    segment;        // SISCI remote segment to device BAR
-    sci_map_t               map;            // SISCI memory map handle
-    size_t                  mm_size;        // Size of memory-mapped region
-    volatile void*          mm_ptr;         // Memory-mapped pointer to device BAR
+    _DEVICE_TYPE_UNKNOWN        = 0x00, // Device is mapped manually by the user
+    _DEVICE_TYPE_SYSFS          = 0x01, // Device is mapped through file descriptor
+    _DEVICE_TYPE_SMARTIO        = 0x04  // Device is mapped by SISCI SmartIO API
 };
-#endif
+
 
 
 /*
- * NVM controller handle container.
+ * Internal handle container.
  */
-struct handle_container
+struct controller
 {
-    int                         ioctl_fd;   // File descriptor
-    struct bar_reference*       bar_ref;    // Device BAR reference handle
-    struct nvm_controller       ctrl;       // Actual controlle handle
+    enum device_type        type;       // Device type
+    int                     fd;         // File descriptor to memory mapping
+    struct device*          device;     // Device reference
+    struct device_memory*   bar;        // Reference to mapped BAR0
+    nvm_ctrl_t              handle;     // User handle
 };
 
 
 
 /* Convenience defines */
-#define encode_page_size(ps)        _nvm_b2log((ps) >> 12)
-#define encode_entry_size(es)       _nvm_b2log(es)
+#define encode_page_size(ps)    _nvm_b2log((ps) >> 12)
+#define encode_entry_size(es)   _nvm_b2log(es)
+
+#define container(ctrl)         \
+    ((struct controller*) (((unsigned char*) (ctrl)) - offsetof(struct controller, handle)))
+
+#define const_container(ctrl)   \
+    ((const struct controller*) (((const unsigned char*) (ctrl)) - offsetof(struct controller, handle)))
+
+
 
 
 
 /*
- * Helper function to retrieve a controller handle's surrounding container.
+ * Look up file descriptor from controller handle.
  */
-static inline struct handle_container* get_container(nvm_ctrl_t ctrl)
+int _nvm_fd_from_ctrl(const nvm_ctrl_t* ctrl)
 {
-    return (struct handle_container*) (((unsigned char*) ctrl) - offsetof(struct handle_container, ctrl));
+    const struct controller* container = const_container(ctrl);
+
+    switch (container->type)
+    {
+        case _DEVICE_TYPE_SYSFS:
+            return container->fd;
+
+        default:
+            return -EBADF;
+    }
 }
+
+
+
+#ifdef _SISCI
+/*
+ * Look up device from controller handle.
+ */
+const struct device* _nvm_device_from_ctrl(const nvm_ctrl_t* ctrl)
+{
+    const struct controller* container = const_container(ctrl);
+
+    if (container->type == _DEVICE_TYPE_SMARTIO && container->bar != NULL)
+    {
+        return container->device;
+    }
+
+    return NULL;
+}
+#endif
+
+
+
+#ifdef _SISCI
+int nvm_dis_ctrl_device(const nvm_ctrl_t* ctrl, sci_device_t* dev)
+{
+    *dev = NULL;
+
+    const struct device* device = _nvm_device_from_ctrl(ctrl);
+
+    if (device != NULL)
+    {
+        *dev = device->device;
+        return 0;
+    }
+
+    return EBADF;
+}
+#endif
 
 
 
 /*
- * Helper function to retrieve a controller handle's surrounding container.
+ * Helper function to allocate a handle container.
  */
-static inline const struct handle_container* get_container_const(const struct nvm_controller* ctrl)
+static struct controller* create_container()
 {
-    return (const struct handle_container*) (((const unsigned char*) ctrl) - offsetof(struct handle_container, ctrl));
+    struct controller* container = (struct controller*) malloc(sizeof(struct controller));
+    
+    if (container == NULL)
+    {
+        dprintf("Failed to allocate controller handle: %s\n", strerror(errno));
+        return NULL;
+    }
+
+    container->type = _DEVICE_TYPE_UNKNOWN;
+    container->fd = -1;
+    container->device = NULL;
+    container->bar = NULL;
+
+    return container;
 }
 
 
 
-int nvm_ctrl_reset(nvm_ctrl_t ctrl, uint64_t acq_addr, uint64_t asq_addr)
+/* 
+ * Helper function to initialize the controller handle by reading
+ * the appropriate registers from the controller BAR.
+ */
+static int initialize_handle(nvm_ctrl_t* ctrl, volatile void* mm_ptr, size_t mm_size)
+{
+    if (mm_size < NVM_CTRL_MEM_MINSIZE)
+    {
+        return EINVAL;
+    }
+
+    ctrl->mm_size = mm_size;
+    ctrl->mm_ptr = mm_ptr;
+
+    // Get the system page size
+    size_t page_size = _nvm_host_page_size();
+    if (page_size == 0)
+    {
+        return ENOMEM;
+    }
+
+    // Get the controller page size
+    uint8_t host_page_size = encode_page_size(page_size);
+    uint8_t max_page_size = CAP$MPSMAX(mm_ptr);
+    uint8_t min_page_size = CAP$MPSMIN(mm_ptr);
+
+    if ( ! (min_page_size <= host_page_size && host_page_size <= max_page_size) )
+    {
+        dprintf("System page size is incompatible with controller page size\n");
+        return ERANGE;
+    }
+
+    // Set controller properties
+    ctrl->page_size = page_size;
+    ctrl->dstrd = CAP$DSTRD(mm_ptr);
+    ctrl->timeout = CAP$TO(mm_ptr) * 500UL;
+    ctrl->max_entries = CAP$MQES(mm_ptr) + 1; // CAP.MQES is 0's based
+
+    return 0;
+}
+
+
+
+int nvm_raw_ctrl_reset(const nvm_ctrl_t* ctrl, uint64_t acq_addr, uint64_t asq_addr)
 {
     volatile uint32_t* cc = CC(ctrl->mm_ptr);
 
@@ -143,90 +249,85 @@ int nvm_ctrl_reset(nvm_ctrl_t ctrl, uint64_t acq_addr, uint64_t asq_addr)
 
 
 
-/* 
- * Helper function to initialize the controller handle by reading
- * the appropriate registers from the controller BAR.
- */
-static int initialize_handle(nvm_ctrl_t ctrl, volatile void* mm_ptr, size_t mm_size)
-{
-    if (mm_size < NVM_CTRL_MEM_MINSIZE)
-    {
-        return EINVAL;
-    }
-
-    ctrl->mm_size = mm_size;
-    ctrl->mm_ptr = mm_ptr;
-
-    // Get the system page size
-    size_t page_size = _nvm_host_page_size();
-    if (page_size == 0)
-    {
-        return ENOMEM;
-    }
-
-    // Get the controller page size
-    uint8_t host_page_size = encode_page_size(page_size);
-    uint8_t max_page_size = CAP$MPSMAX(mm_ptr);
-    uint8_t min_page_size = CAP$MPSMIN(mm_ptr);
-
-    if ( ! (min_page_size <= host_page_size && host_page_size <= max_page_size) )
-    {
-        dprintf("System page size is incompatible with controller page size\n");
-        return ERANGE;
-    }
-
-    // Set controller properties
-    ctrl->page_size = page_size;
-    ctrl->dstrd = CAP$DSTRD(mm_ptr);
-    ctrl->timeout = CAP$TO(mm_ptr) * 500UL;
-    ctrl->max_entries = CAP$MQES(mm_ptr) + 1; // CAP.MQES is 0's based
-
-    return 0;
-}
-
-
-
-int nvm_ctrl_init_userspace(nvm_ctrl_t* ctrl_handle, volatile void* mm_ptr, size_t mm_size)
+int nvm_raw_ctrl_init(nvm_ctrl_t** ctrl, volatile void* mm_ptr, size_t mm_size)
 {
     int err;
+    *ctrl = NULL;
 
-    *ctrl_handle = NULL;
-
-    struct handle_container* container = (struct handle_container*) malloc(sizeof(struct handle_container));
+    struct controller* container = create_container();
     if (container == NULL)
     {
-        dprintf("Failed to allocate controller handle: %s\n", strerror(errno));
         return ENOMEM;
     }
 
-    container->ioctl_fd = -1;
-    container->bar_ref = NULL;
+    container->type = _DEVICE_TYPE_UNKNOWN;
 
-    err = initialize_handle(&container->ctrl, mm_ptr, mm_size);
+    err = initialize_handle(&container->handle, mm_ptr, mm_size);
     if (err != 0)
     {
         free(container);
         return err;
     }
 
-    *ctrl_handle = &container->ctrl;
+    *ctrl = &container->handle;
     return 0;
 }
 
 
 
-int nvm_ctrl_init(nvm_ctrl_t* ctrl_handle, uint64_t device_id)
+#ifdef _SISCI
+int nvm_dis_ctrl_init(nvm_ctrl_t** ctrl, uint64_t dev_id, uint32_t adapter)
 {
     int err;
-    char path[128];
+    *ctrl = NULL;
 
-    *ctrl_handle = NULL;
+    struct controller* container = create_container();
+    if (container == NULL)
+    {
+        return ENOMEM;
+    }
 
-    snprintf(path, sizeof(path), "/dev/disnvme%lu", device_id);
+    container->type = _DEVICE_TYPE_SMARTIO;
+
+    err = _nvm_device_get(&container->device, dev_id, adapter);
+    if (err != 0)
+    {
+        free(container);
+        return err;
+    }
+
+    err = _nvm_device_memory_get(&container->bar, container->device, 0, NVM_CTRL_MEM_MINSIZE, _DEVICE_MEMORY_BAR);
+    if (err != 0)
+    {
+        _nvm_device_put(container->device);
+        free(container);
+        return err;
+    }
+
+    err = initialize_handle(&container->handle, container->bar->vaddr, container->bar->size);
+    if (err != 0)
+    {
+        _nvm_device_memory_put(container->bar);
+        _nvm_device_put(container->device);
+        free(container);
+        return err;
+    }
+
+    *ctrl = &container->handle;
+    return 0;
+}
+#endif
+
+
+
+int nvm_ctrl_init(nvm_ctrl_t** ctrl, const char* path)
+{
+    int err;
+    
     int fd = open(path, O_RDWR | O_NONBLOCK);
     if (fd < 0)
     {
-        dprintf("Could not find device %lu: %s\n", device_id, strerror(errno));
+        dprintf("Could not find device resource file: %s\n", path);
         return ENODEV;
     }
 
@@ -234,23 +335,22 @@ int nvm_ctrl_init(nvm_ctrl_t* ctrl_handle, uint64_t device_id)
     if (ptr == NULL)
     {
         close(fd);
-        dprintf("Failed to map BAR resource: %s\n", strerror(errno));
+        dprintf("Failed to map device memory: %s\n", strerror(errno));
         return EIO;
     }
 
-    struct handle_container* container = (struct handle_container*) malloc(sizeof(struct handle_container));
+    struct controller* container = create_container();
     if (container == NULL)
     {
         munmap((void*) ptr, NVM_CTRL_MEM_MINSIZE);
         close(fd);
-        dprintf("Failed to allocate controller handle: %s\n", strerror(errno));
         return ENOMEM;
     }
 
-    container->ioctl_fd = fd;
-    container->bar_ref = NULL;
+    container->type = _DEVICE_TYPE_SYSFS;
+    container->fd = fd;
 
-    err = initialize_handle(&container->ctrl, ptr, NVM_CTRL_MEM_MINSIZE);
+    err = initialize_handle(&container->handle, ptr, NVM_CTRL_MEM_MINSIZE);
     if (err != 0)
     {
         munmap((void*) ptr, NVM_CTRL_MEM_MINSIZE);
@@ -259,259 +359,40 @@ int nvm_ctrl_init(nvm_ctrl_t* ctrl_handle, uint64_t device_id)
         return err;
     }
 
-    *ctrl_handle = &container->ctrl;
+    *ctrl = &container->handle;
     return 0;
 }
 
 
 
-/*
- * Get the IOCTL file descriptor from the controller reference.
- */
-int _nvm_ioctl_fd_from_ctrl(const struct nvm_controller* ctrl)
-{
-    const struct handle_container* container = get_container_const(ctrl);
-    
-    return container->ioctl_fd;
-}
-
-
-
-#ifdef _SISCI
-
-/*
- * Look up device reference from a controller handle.
- */
-const struct nvm_device* _nvm_dev_from_ctrl(const struct nvm_controller* ctrl)
-{
-    const struct handle_container* container = get_container_const(ctrl);
-
-    if (container->bar_ref != NULL)
-    {
-        return &container->bar_ref->device;
-    }
-
-    return NULL;
-}
-
-
-
-/* 
- * Acquire a device reference.
- */
-int _nvm_dev_get(struct nvm_device* dev, uint64_t dev_id, uint32_t adapter)
-{
-    sci_error_t err;
-
-    dev->device_id = dev_id;
-    dev->adapter = adapter;
-
-    SCIOpen(&dev->sd, 0, &err);
-    if (err != SCI_ERR_OK)
-    {
-        dprintf("Failed to create virtual device: %s\n", SCIGetErrorString(err));
-        return EIO;
-    }
-
-    SCIBorrowDevice(dev->sd, &dev->device, dev_id, 0, &err);
-    if (err != SCI_ERR_OK)
-    {
-        dprintf("Failed to increase device reference: %s\n", SCIGetErrorString(err));
-        SCIClose(dev->sd, 0, &err);
-        return ENODEV;
-    }
-    
-    return 0;
-}
-
-
-
-/*
- * Release device reference.
- */
-void _nvm_dev_put(struct nvm_device* dev)
-{
-    sci_error_t err;
-    SCIReturnDevice(dev->device, 0, &err);
-    SCIClose(dev->sd, 0, &err);
-}
-
-
-/* 
- * Connect and memory-map to a BAR region on a PCI device in the cluster 
- */
-static int connect_device_bar(struct bar_reference* dev, int bar, size_t size)
-{
-    int status;
-    sci_error_t err;
-
-    dev->mm_size = size;
-
-    SCIConnectDeviceMemory(dev->device.sd, &dev->segment, dev->device.device, dev->device.adapter, bar, 0, 0, &err);
-    if (err != SCI_ERR_OK)
-    {
-        dprintf("Failed to connect to device memory: %s\n", SCIGetErrorString(err));
-        status = ENODEV;
-        goto quit;
-    }
-
-    dev->mm_ptr = SCIMapRemoteSegment(dev->segment, &dev->map, 0, size, NULL, SCI_FLAG_IO_MAP_IOSPACE, &err);
-    if (err != SCI_ERR_OK)
-    {
-        dprintf("Failed to memory-map device memory: %s\n", SCIGetErrorString(err));
-        status = EIO;
-        goto disconnect;
-    }
-
-    return 0;
-
-disconnect:
-    do
-    {
-        SCIDisconnectSegment(dev->segment, 0, &err);
-    }
-    while (err == SCI_ERR_BUSY);
-    
-    if (err != SCI_ERR_OK)
-    {
-        dprintf("Failed to disconnect from device memory: %s\n", SCIGetErrorString(err));
-    }
-
-quit:
-    return status;
-}
-
-
-
-/* 
- * Acquire a reference to a device BAR region.
- */
-static int get_bar_reference(struct bar_reference* ref, uint64_t dev_id, uint32_t adapter, int bar, size_t size)
-{
-    int err;
-
-    err = _nvm_dev_get(&ref->device, dev_id, adapter);
-    if (err != 0)
-    {
-        return err;
-    }
-
-    err = connect_device_bar(ref, bar, size);
-    if (err != 0)
-    {
-        _nvm_dev_put(&ref->device);
-        return err;
-    }
-
-    return 0;
-}
-
-
-
-/*
- * Release device BAR reference.
- */
-static void put_bar_reference(struct bar_reference* bar)
-{
-    sci_error_t err;
-
-    bar->mm_ptr = NULL;
-    bar->mm_size = 0;
-
-    do
-    {
-        SCIUnmapSegment(bar->map, 0, &err);
-    }
-    while (err == SCI_ERR_BUSY);
-
-    if (err != SCI_ERR_OK)
-    {
-        dprintf("Failed to unmap device memory: %s\n", SCIGetErrorString(err));
-    }
-
-    do
-    {
-        SCIDisconnectSegment(bar->segment, 0, &err);
-    }
-    while (err == SCI_ERR_BUSY);
-
-    if (err != SCI_ERR_OK)
-    {
-        dprintf("Failed to disconnect from device memory: %s\n", SCIGetErrorString(err));
-    }
-
-    _nvm_dev_put(&bar->device);
-}
-
-
-
-int nvm_dis_ctrl_init(nvm_ctrl_t* ctrl_handle, uint64_t device_id, uint32_t adapter)
-{
-    int err;
-
-    *ctrl_handle = NULL;
-
-    struct bar_reference* bar_ref = (struct bar_reference*) malloc(sizeof(struct bar_reference));
-    if (bar_ref == NULL)
-    {
-        dprintf("Failed to allocate device reference handle: %s\n", strerror(errno));
-        return ENOMEM;
-    }
-
-    err = get_bar_reference(bar_ref, device_id, adapter, 0, NVM_CTRL_MEM_MINSIZE);
-    if (err != 0)
-    {
-        free(bar_ref);
-        return err;
-    }
-
-    struct handle_container* container = (struct handle_container*) malloc(sizeof(struct handle_container));
-    if (container == NULL)
-    {
-        dprintf("Failed to allocate controller handle: %s\n", strerror(errno));
-        free(bar_ref);
-        return ENOMEM;
-    }
-
-    container->ioctl_fd = -1;
-    container->bar_ref = bar_ref;
-
-    err = initialize_handle(&container->ctrl, bar_ref->mm_ptr, bar_ref->mm_size);
-    if (err != 0)
-    {
-        free(bar_ref);
-        free(container);
-        return err;
-    }
-
-    *ctrl_handle = &container->ctrl;
-    return 0;
-}
-
-#endif /* _SISCI */
-
-
-
-void nvm_ctrl_free(nvm_ctrl_t ctrl)
+void nvm_ctrl_free(nvm_ctrl_t* ctrl)
 {
     if (ctrl != NULL)
     {
-        struct handle_container* container = get_container(ctrl);
+        struct controller* container = container(ctrl);
 
-        if (container->ioctl_fd >= 0)
+        switch (container->type)
         {
+            case _DEVICE_TYPE_UNKNOWN:
+                // Do nothing
+                break;
 
-            munmap((void*) ctrl->mm_ptr, ctrl->mm_size);
-            close(container->ioctl_fd);
-        }
+            case _DEVICE_TYPE_SYSFS:
+                munmap((void*) ctrl->mm_ptr, ctrl->mm_size);
+                close(container->fd);
+                break;
 
 #if _SISCI
-        if (container->bar_ref != NULL)
-        {
-            put_bar_reference(container->bar_ref);
-            free(container->bar_ref);
-        }
+            case _DEVICE_TYPE_SMARTIO:
+                _nvm_device_memory_put(container->bar);
+                _nvm_device_put(container->device);
+                break;
 #endif
+
+            default:
+                dprintf("Unknown controller type\n");
+                break;
+        }
 
         free(container);
     }

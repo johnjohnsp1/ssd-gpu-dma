@@ -8,464 +8,342 @@
 #endif
 
 #include <nvm_types.h>
+#include <nvm_aq.h>
 #include <nvm_rpc.h>
-#include <nvm_admin.h>
-#include <nvm_util.h>
 #include <nvm_queue.h>
-#include <stdlib.h>
-#include <stdint.h>
+#include <nvm_ctrl.h>
+#include <nvm_cmd.h>
+#include <nvm_util.h>
+#include <nvm_error.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <pthread.h>
 #include <errno.h>
 #include <string.h>
-#include "regs.h"
+#include "dev.h"
 #include "rpc.h"
+#include "ctrl.h"
+#include "util.h"
 #include "dprintf.h"
-#include "dprintnvm.h"
-
-
-/* Forward declaration */
-struct rpc_reference;
 
 
 
 /*
- * RPC reference descriptor.
- *
- * Use this reference to execute NVM commands on a remote (or local) manager.
+ * Local admin queue-pair descriptor.
  */
-struct nvm_rpc_reference
+struct local_admin
 {
-    struct rpc_reference*       reference;  // Reference to a remote manager.
-    nvm_manager_t               manager;    // Reference to a local manager.
-    uint64_t                    timeout;    // Controller time out
+    nvm_queue_t         acq;        // Admin completion queue (ACQ)
+    nvm_queue_t         asq;        // Admin submission queue (ASQ)
+    uint64_t            timeout;    // Controller timeout
 };
 
 
 
-
-int nvm_rpc_bind_local(nvm_rpc_t* ref, nvm_manager_t manager)
+/*
+ * Helper function to remove all server handles.
+ */
+static void release_handles(nvm_aq_ref ref)
 {
-    *ref = NULL;
+    struct rpc_handle* curr;
+    struct rpc_handle* next;
 
-    nvm_rpc_t handle = (nvm_rpc_t) malloc(sizeof(struct nvm_rpc_reference));
-    if (handle == NULL)
+    if (ref != NULL)
     {
-        dprintf("Failed to allocate handle: %s\n", strerror(errno));
+        curr = NULL;
+        next = ref->handles;
+        while (next != NULL)
+        {
+            curr = next;
+            next = curr->next;
+
+            if (curr->release != NULL)
+            {
+                curr->release(ref, curr->data);
+            }
+
+            free(curr);
+        }
+
+        ref->handles = NULL;
+    }
+}
+
+
+/* 
+ * Helper function to allocate an admin reference.
+ */
+int _nvm_ref_get(nvm_aq_ref* handle, const nvm_ctrl_t* ctrl)
+{
+    int err;
+
+    *handle = NULL;
+
+    nvm_aq_ref ref = (nvm_aq_ref) malloc(sizeof(struct nvm_admin_reference));
+    if (ref == NULL)
+    {
+        dprintf("Failed to allocate reference: %s\n", strerror(errno));
         return ENOMEM;
     }
 
-    handle->reference = NULL;
-    handle->manager = manager;
-    handle->timeout = 0;
+    err = pthread_mutex_init(&ref->lock, NULL);
+    if (err != 0)
+    {
+        dprintf("Failed to initialize reference lock: %s\n", strerror(err));
+        goto free_handle;
+    }
 
-    *ref = handle;
+    //ref->device = NULL;
+    ref->ctrl = ctrl;
+    ref->handles = NULL;
+    ref->data = NULL;
+    ref->release = NULL;
+    ref->stub = NULL;
+
+//#ifdef _SISCI
+//    if (_nvm_device_from_ctrl(ctrl) != NULL)
+//    {
+//        err = _nvm_device_dup(&ref->device, _nvm_device_from_ctrl(ctrl));
+//        if (err != 0)
+//        {
+//            dprintf("Failed to increase device reference: %s\n", strerror(err));
+//            goto destroy_mtx;
+//        }
+//    }
+//#endif
+
+    *handle = ref;
     return 0;
+
+
+destroy_mtx:
+    pthread_mutex_destroy(&ref->lock);
+
+free_handle:
+    free(ref);
+
+    return err;
 }
 
 
 
-void nvm_rpc_unbind(nvm_rpc_t ref)
+/* 
+ * Helper function to free an admin reference.
+ */
+void _nvm_ref_put(nvm_aq_ref ref)
 {
     if (ref != NULL)
     {
-#ifdef _SISCI
-        if (ref->reference != NULL)
-        {
-            _nvm_rpc_ref_free(ref->reference);
-            free(ref->reference);
-        }
-#endif
+        pthread_mutex_lock(&ref->lock);
 
+        release_handles(ref);
+
+        if (ref->release != NULL)
+        {
+            ref->release(ref, ref->data);
+        }
+
+//#ifdef _SISCI
+//        if (ref->device != NULL)
+//        {
+//            _nvm_device_put(ref->device);
+//        }
+//#endif
+
+        pthread_mutex_unlock(&ref->lock);
+
+        pthread_mutex_destroy(&ref->lock);
         free(ref);
     }
 }
 
 
 
-#ifdef _SISCI
+/* 
+ * Execute an NVM admin command.
+ */
+int _nvm_local_admin(struct local_admin* admin, const nvm_cmd_t* cmd, nvm_cpl_t* cpl)
+{
+    nvm_cmd_t* in_queue_cmd;
+    nvm_cpl_t* in_queue_cpl;
+
+    // Try to enqueue a message
+    if ((in_queue_cmd = nvm_sq_enqueue(&admin->asq)) == NULL)
+    {
+        // Queue was full, but we're holding the lock so no blocking
+        return EAGAIN;
+    }
+    
+    // Copy command into queue slot (but keep original id)
+    uint16_t in_queue_id = *NVM_CMD_CID(in_queue_cmd);
+    memcpy(in_queue_cmd, cmd, sizeof(nvm_cmd_t));
+    *NVM_CMD_CID(in_queue_cmd) = in_queue_id;
+
+    // Submit command and wait for completion
+    nvm_sq_submit(&admin->asq);
+
+    in_queue_cpl = nvm_cq_dequeue_block(&admin->acq, admin->timeout);
+    if (in_queue_cpl == NULL)
+    {
+        dprintf("Waiting for admin queue completion timed out\n");
+        return ETIME;
+    }
+
+    nvm_sq_update(&admin->asq);
+
+    // Copy completion and return
+    memcpy(cpl, in_queue_cpl, sizeof(nvm_cpl_t));
+    *NVM_CPL_CID(cpl) = *NVM_CMD_CID(cmd);
+
+    return 0;
+}
+
+
 
 /*
- * Trigger remote interrupt with data.
+ * Helper function to create a local admin descriptor.
  */
-int _nvm_rpc_ref_send(struct rpc_reference* ref, void* data, size_t length)
+static struct local_admin* create_admin(const nvm_ctrl_t* ctrl, const nvm_dma_t* window)
 {
-    sci_error_t err;
-
-    SCITriggerDataInterrupt(ref->intr, data, length, 0, &err);
-    if (err != SCI_ERR_OK)
+    struct local_admin* admin = (struct local_admin*) malloc(sizeof(struct local_admin));
+    
+    if (admin == NULL)
     {
-        dprintf("Failed to trigger data interrupt\n");
-        return EIO;
+        dprintf("Failed to create admin queue-pair descriptors: %s\n", strerror(errno));
+        return NULL;
     }
 
-    return 0;
+    nvm_queue_clear(&admin->acq, ctrl, true, 0, window->vaddr, window->ioaddrs[0]);
+
+    void* asq_vaddr = (void*) (((unsigned char*) window->vaddr) + window->page_size);
+    nvm_queue_clear(&admin->asq, ctrl, false, 0, asq_vaddr, window->ioaddrs[1]);
+
+    memset(window->vaddr, 0, 2 * window->page_size);
+
+    admin->timeout = ctrl->timeout;
+
+    return admin;
+}
+
+
+/*
+ * Helper function to remove an admin descriptor.
+ */
+static void remove_admin(const struct nvm_admin_reference* ref, struct local_admin* admin)
+{
+    if (ref != NULL)
+    {
+        free(admin);
+    }
 }
 
 
 
-int _nvm_rpc_ref_init(struct rpc_reference* ref, uint32_t node_id, uint32_t intr_no, uint32_t adapter)
-{
-    sci_error_t err;
-
-    ref->node_id = node_id;
-    ref->intr_no = intr_no;
-    ref->adapter = adapter;
-
-    SCIOpen(&ref->sd, 0, &err);
-    if (err != SCI_ERR_OK)
-    {
-        dprintf("Failed to initialize SISCI virtual device: %s\n", SCIGetErrorString(err));
-        return EIO;
-    }
-
-    SCIConnectDataInterrupt(ref->sd, &ref->intr, node_id, adapter, intr_no, SCI_INFINITE_TIMEOUT, 0, &err);
-    if (err != SCI_ERR_OK)
-    {
-        dprintf("Failed to connect to remote data interrupt %u on node %u (%u): %s\n", 
-                intr_no, node_id, adapter, SCIGetErrorString(err));
-        SCIClose(ref->sd, 0, &err);
-        return EIO;
-    }
-
-    return 0;
-}
-
-
-
-void _nvm_rpc_ref_free(struct rpc_reference* ref)
-{
-    sci_error_t err;
-
-    do
-    {
-        SCIDisconnectDataInterrupt(ref->intr, 0, &err);
-    }
-    while (err == SCI_ERR_BUSY);
-
-    SCIClose(ref->sd, 0, &err);
-}
-
-
-#endif /* _SISCI */
-
-
-
-
-#ifdef _SISCI
-
-int nvm_dis_rpc_bind(nvm_rpc_t* ref, uint32_t node_id, uint32_t intr_no, uint32_t adapter)
+int nvm_raw_rpc(nvm_aq_ref ref, nvm_cmd_t* cmd, nvm_cpl_t* cpl)
 {
     int err;
 
-    *ref = NULL;
-
-    struct rpc_reference* reference = (struct rpc_reference*) malloc(sizeof(struct rpc_reference));
-    if (reference == NULL)
-    {
-        dprintf("Failed to allocate handle: %s\n", strerror(errno));
-        return ENOMEM;
-    }
-
-    err = _nvm_rpc_ref_init(reference, node_id, intr_no, adapter);
+    err = pthread_mutex_lock(&ref->lock);
     if (err != 0)
     {
-        free(reference);
-        return EIO;
+        dprintf("Failed to take reference lock\n");
+        return NVM_ERR_PACK(NULL, EBADF);
     }
 
-    nvm_rpc_t handle = (nvm_rpc_t) malloc(sizeof(struct nvm_rpc_reference));
-    if (handle == NULL)
-    {
-        free(reference);
-        dprintf("Failed to allocate handle: %s\n", strerror(errno));
-        return ENOMEM;
-    }
+    err = ref->stub(ref->data, cmd, cpl);
 
-    handle->reference = reference;
-    handle->manager = NULL;
-    handle->timeout = DIS_CLUSTER_TIMEOUT;
+    pthread_mutex_unlock(&ref->lock);
 
-    *ref = handle;
-    return 0;
-}
-
-#endif
-
-
-
-int nvm_rpc_raw_cmd(nvm_rpc_t ref, const nvm_cmd_t* cmd, nvm_cpl_t* cpl)
-{
-    int status = EINVAL;
-    struct rpc_cmd request;
-    struct rpc_cpl reply;
-
-    memcpy(&request.cmd, cmd, sizeof(nvm_cmd_t));
-
-    if (ref->manager != NULL)
-    {
-        status = _nvm_rpc_local(ref->manager, &request, &reply);
-    }
-#ifdef _SISCI
-    else if (ref->reference != NULL)
-    {
-        sci_error_t err;
-        struct rpc_handle handle;
-
-        SCIGetLocalNodeId(ref->reference->adapter, &request.node_id, 0, &err);
-        if (err != SCI_ERR_OK)
-        {
-            return EIO;
-        }
-
-        status = _nvm_rpc_handle_init(&handle, ref->reference->adapter);
-        if (status != 0)
-        {
-            return status;
-        }
-
-        request.intr_no = handle.intr_no;
-
-        status = _nvm_rpc_ref_send(ref->reference, &request, sizeof(request));
-        if (status != 0)
-        {
-            _nvm_rpc_handle_free(&handle);
-            return status;
-        }
-
-        uint32_t length = sizeof(reply);
-        SCIWaitForDataInterrupt(handle.intr, &reply, &length, ref->timeout, 0, &err);
-        if (err != SCI_ERR_OK)
-        {
-            _nvm_rpc_handle_free(&handle);
-            dprintf("Did not receive call back from manager\n");
-            return EIO;
-        }
-
-        _nvm_rpc_handle_free(&handle);
-
-        status = reply.status;
-    }
-#endif
-
-    memcpy(cpl, &reply.cpl, sizeof(nvm_cpl_t));
-
-    return status;
+    return NVM_ERR_PACK(cpl, err);
 }
 
 
-int nvm_rpc_cq_create(nvm_queue_t* handle, nvm_rpc_t ref, nvm_ctrl_t ctrl, uint16_t id, void* vaddr, uint64_t ioaddr)
-{
-    nvm_cmd_t command;
-    nvm_cpl_t completion;
-    nvm_queue_t cq;
 
-    nvm_queue_clear(&cq, ctrl, 1, id, vaddr, ioaddr);
-
-    memset(&command, 0, sizeof(nvm_cmd_t));
-    nvm_admin_cq_create(&command, &cq);
-
-    int err = nvm_rpc_raw_cmd(ref, &command, &completion);
-    if (err != 0)
-    {
-        return err;
-    }
-
-    if ( ! CPL_OK(&completion) )
-    {
-        dprintnvm(&command, &completion);
-        return EIO;
-    }
-
-    *handle = cq;
-    return 0;
-}
-
-
-int nvm_rpc_sq_create(nvm_queue_t* handle, nvm_rpc_t ref, nvm_ctrl_t ctrl, const nvm_queue_t* cq, uint16_t id, void* vaddr, uint64_t ioaddr)
-{
-    nvm_cmd_t command;
-    nvm_cpl_t completion;
-    nvm_queue_t sq;
-
-    nvm_queue_clear(&sq, ctrl, 0, id, vaddr, ioaddr);
-
-    memset(&command, 0, sizeof(nvm_cmd_t));
-    nvm_admin_sq_create(&command, &sq, cq);
-
-    int err = nvm_rpc_raw_cmd(ref, &command, &completion);
-    if (err != 0)
-    {
-        return err;
-    }
-
-    if ( ! CPL_OK(&completion) )
-    {
-        dprintnvm(&command, &completion);
-        return EIO;
-    }
-
-    *handle = sq;
-    return 0;
-}
-
-
-int nvm_rpc_ctrl_info(nvm_ctrl_info_t* info, nvm_rpc_t ref, nvm_ctrl_t ctrl, void* vaddr, uint64_t ioaddr)
+int nvm_rpc_bind(nvm_aq_ref ref, void* data, rpc_deleter_t release, rpc_stub_t stub)
 {
     int err;
-    nvm_cmd_t command;
-    nvm_cpl_t completion;
 
-    memset(vaddr, 0, 0x1000);
-    memset(info, 0, sizeof(nvm_ctrl_info_t));
-    info->nvme_version = (uint32_t) *VER(ctrl->mm_ptr);
-    info->page_size = ctrl->page_size;
-    info->db_stride = 1UL << ctrl->dstrd;
-    info->timeout = ctrl->timeout;
-    info->contiguous = !!CAP$CQR(ctrl->mm_ptr);
-    info->max_entries = ctrl->max_entries;
-
-    if (vaddr == NULL)
-    {
-        return 0;
-    }
-
-    memset(&command, 0, sizeof(nvm_cmd_t));
-    nvm_admin_identify_ctrl(&command, ioaddr);
-
-    err = nvm_rpc_raw_cmd(ref, &command, &completion);
+    err = pthread_mutex_lock(&ref->lock);
     if (err != 0)
     {
-        return err;
+        dprintf("Failed to take reference lock\n");
+        return EBADF;
     }
 
-    if ( ! CPL_OK(&completion) )
+    if (ref->data != NULL || ref->stub != NULL)
     {
-        dprintnvm(&command, &completion);
-        return EIO;
-    }
-
-    const unsigned char* bytes = ((const unsigned char*) vaddr);
-
-    memcpy(info->pci_vendor, bytes, 4);
-    memcpy(info->serial_no, bytes + 4, 20);
-    memcpy(info->model_no, bytes + 24, 40);
-    memcpy(info->firmware, bytes + 64, 8);
-
-    info->max_transfer_size = (1UL << bytes[77]) * (1UL << (12 + CAP$MPSMIN(ctrl->mm_ptr)));
-    info->sq_entry_size = 1 << _RB(bytes[512], 3, 0);
-    info->cq_entry_size = 1 << _RB(bytes[513], 3, 0);
-    info->max_out_cmds = *((uint16_t*) (bytes + 514));
-    info->max_n_ns = *((uint32_t*) (bytes + 516));
-
-    return 0;
-}
-
-
-int nvm_rpc_ns_info(nvm_ns_info_t* info, nvm_rpc_t ref, uint32_t ns_id, void* vaddr, uint64_t ioaddr)
-{
-    int err;
-    nvm_cmd_t cmd;
-    nvm_cpl_t cpl;
-
-    memset(vaddr, 0, 0x1000);
-    memset(info, 0, sizeof(nvm_ns_info_t));
-    info->ns_id = ns_id;
-
-    if (vaddr == NULL)
-    {
+        pthread_mutex_unlock(&ref->lock);
         return EINVAL;
     }
 
-    nvm_admin_identify_ns(&cmd, ns_id, ioaddr);
-
-    err = nvm_rpc_raw_cmd(ref, &cmd, &cpl);
-    if (err != 0)
-    {
-        return err;
-    }
-
-    if ( ! CPL_OK(&cpl) )
-    {
-        dprintnvm(&cmd, &cpl);
-        return EIO;
-    }
-
-    const unsigned char* bytes = (const unsigned char*) vaddr;
-    info->size = *((uint64_t*) bytes);
-    info->capacity = *((uint64_t*) (bytes + 8));
-    info->utilization = *((uint64_t*) (bytes + 16));
-
-    uint8_t format_idx = _RB(bytes[26], 3, 0);
-
-    uint32_t lba_format = *((uint32_t*) (bytes + 128 + sizeof(uint32_t) * format_idx));
-    info->lba_data_size = 1 << _RB(lba_format, 23, 16);
-    info->metadata_size = _RB(lba_format, 15, 0);
+    ref->data = data;
+    ref->release = release;
+    ref->stub = stub;
 
     return 0;
 }
 
 
-int nvm_rpc_get_num_queues(nvm_rpc_t ref, uint16_t* n_cqs, uint16_t* n_sqs)
+
+/*
+ * Create admin queues locally.
+ */
+int nvm_aq_create(nvm_aq_ref* handle, const nvm_ctrl_t* ctrl, const nvm_dma_t* window)
 {
     int err;
-    nvm_cmd_t command;
-    nvm_cpl_t completion;
+    nvm_aq_ref ref;
 
-    memset(&command, 0, sizeof(nvm_cmd_t));
-    nvm_admin_current_num_queues(&command, 0, 0, 0);
+    *handle = NULL;
 
-    err = nvm_rpc_raw_cmd(ref, &command, &completion);
+    if (ctrl->page_size != window->page_size)
+    {
+        dprintf("Controller page size differs from DMA window page size\n");
+        return EINVAL;
+    }
+    else if (window->n_ioaddrs < 2)
+    {
+        dprintf("DMA window is not large enough\n");
+        return EINVAL;
+    }
+    else if (window->vaddr == NULL)
+    {
+        dprintf("DMA window is not mapped into virtual address space\n");
+        return EINVAL;
+    }
+
+    // Allocate reference
+    err = _nvm_ref_get(&ref, ctrl);
     if (err != 0)
     {
         return err;
     }
 
-    if ( ! CPL_OK(&completion) )
+    // Allocate admin descriptor
+    ref->data = create_admin(ref->ctrl, window);
+    if (ref->data == NULL)
     {
-        dprintnvm(&command, &completion);
-        return EIO;
+        _nvm_ref_put(ref);
+        return ENOMEM;
     }
 
-    *n_sqs = (completion.dword[0] >> 16) + 1;
-    *n_cqs = (completion.dword[0] & 0xffff) + 1;
+    ref->stub = (rpc_stub_t) _nvm_local_admin;
+    ref->release = (rpc_deleter_t) remove_admin;
+
+    // Reset controller
+    const struct local_admin* admin = (const struct local_admin*) ref->data;
+    nvm_raw_ctrl_reset(ctrl, admin->acq.ioaddr, admin->asq.ioaddr);
+    
+    *handle = ref;
     return 0;
 }
 
 
-int nvm_rpc_set_num_queues(nvm_rpc_t ref, uint16_t n_cqs, uint16_t n_sqs)
+
+void nvm_aq_destroy(nvm_aq_ref ref)
 {
-    return nvm_rpc_request_num_queues(ref, &n_cqs, &n_sqs);
+    _nvm_ref_put(ref);
 }
 
-
-int nvm_rpc_request_num_queues(nvm_rpc_t ref, uint16_t* n_cqs, uint16_t* n_sqs)
-{
-    int err;
-    nvm_cmd_t command;
-    nvm_cpl_t completion;
-
-    if (*n_cqs == 0 || *n_sqs == 0)
-    {
-        return ERANGE;
-    }
-
-    memset(&command, 0, sizeof(nvm_cmd_t));
-    nvm_admin_current_num_queues(&command, 1, *n_cqs, *n_sqs);
-
-    err = nvm_rpc_raw_cmd(ref, &command, &completion);
-    if (err != 0)
-    {
-        return err;
-    }
-
-    if ( ! CPL_OK(&completion) )
-    {
-        dprintnvm(&command, &completion);
-        return EIO;
-    }
-
-    *n_sqs = (completion.dword[0] >> 16) + 1;
-    *n_cqs = (completion.dword[0] & 0xffff) + 1;
-    return 0;
-}
 

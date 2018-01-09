@@ -1,5 +1,5 @@
 cmake_minimum_required (VERSION 3.1)
-project (disnvme LANGUAGES C CXX)
+project (libnvm LANGUAGES C CXX)
 
 set (CMAKE_C_STANDARD 99)
 set (CMAKE_CXX_STANDARD 11)
@@ -62,9 +62,9 @@ if (sisci_lib)
 endif ()
 
 # Library source files
-set (libnvme_root "${PROJECT_SOURCE_DIR}/src")
-file (GLOB libnvme_source "${libnvme_root}/*.c")
-file (GLOB libnvme_include "${PROJECT_BINARY_DIR}/include/*.h" "${PROJECT_SOURCE_DIR}/include/*.h")
+set (libnvm_root "${PROJECT_SOURCE_DIR}/src")
+file (GLOB libnvm_source "${libnvm_root}/*.c")
+file (GLOB libnvm_include "${PROJECT_BINARY_DIR}/include/*.h" "${PROJECT_SOURCE_DIR}/include/*.h")
 
 # Module source files
 set (module_root "${PROJECT_SOURCE_DIR}/module")
@@ -93,25 +93,26 @@ include_directories ("${PROJECT_BINARY_DIR}/include" "${PROJECT_SOURCE_DIR}/incl
 
 
 # Create NVME library target
-add_library (libnvme SHARED ${libnvme_source})
+add_library (libnvm SHARED ${libnvm_source})
 
 if (sisci_include AND sisci_lib AND NOT no_sisci)
-    target_compile_definitions(libnvme PRIVATE _REENTRANT _SISCI __DIS_CLUSTER__)
-    target_link_libraries (libnvme ${sisci_lib} Threads::Threads)
+    target_compile_definitions(libnvm PRIVATE _REENTRANT _SISCI __DIS_CLUSTER__)
+    target_link_libraries (libnvm ${sisci_lib} Threads::Threads)
 else ()
-    target_link_libraries (libnvme Threads::Threads)
+    list (FILTER libnvm_source EXCLUDE REGEX "*_dis.c")
+    target_link_libraries (libnvm Threads::Threads)
 endif ()
 
 if (CUDA_FOUND AND NOT no_cuda)
-    target_compile_definitions(libnvme PRIVATE _CUDA __CUDA__)
+    target_compile_definitions(libnvm PRIVATE _CUDA __CUDA__)
 endif ()
 
 # Set name of library
-set_target_properties (libnvme PROPERTIES OUTPUT_NAME "${CMAKE_PROJECT_NAME}")
+set_target_properties (libnvm PROPERTIES OUTPUT_NAME "${CMAKE_PROJECT_NAME}")
 
 # Set install locations
-install (FILES ${libnvme_include} DESTINATION "include")
-install (TARGETS libnvme DESTINATION "lib")
+install (FILES ${libnvm_include} DESTINATION "include")
+install (TARGETS libnvm DESTINATION "lib")
 
 
 
@@ -119,10 +120,10 @@ install (TARGETS libnvme DESTINATION "lib")
 # Create kernel module makefile
 if (NOT no_module)
     if (CUDA_FOUND AND NOT no_nvidia_driver AND EXISTS "${driver_dir}/Module.symvers")
-        set (module_ccflags "-D_CUDA -I${driver_include} -I${libnvme_root}")
+        set (module_ccflags "-D_CUDA -I${driver_include} -I${libnvm_root}")
         set (module_symbols "${driver_dir}/Module.symvers")
     else ()
-        set (module_ccflags "-I${libnvme_root}")
+        set (module_ccflags "-I${libnvm_root}")
     endif ()
 
     set (kdir "/lib/modules/${CMAKE_SYSTEM_VERSION}/build")
@@ -137,8 +138,8 @@ endif ()
 macro (make_sample target binary_name files)
     add_executable (${target} EXCLUDE_FROM_ALL ${files})
 
-    add_dependencies (${target} libnvme)
-    target_link_libraries (${target} libnvme)
+    add_dependencies (${target} libnvm)
+    target_link_libraries (${target} libnvm)
 
     target_include_directories (${target} PRIVATE "${samples_common}")
     target_sources (${target} PRIVATE ${samples_common_all})
@@ -180,8 +181,8 @@ macro (make_benchmark target binary_name files)
     if (CUDA_FOUND AND NOT no_cuda)
         cuda_add_executable (${target} ${files} OPTIONS ) # Ugly bugly
 
-        add_dependencies (${target} libnvme)
-        target_link_libraries (${target} libnvme)
+        add_dependencies (${target} libnvm)
+        target_link_libraries (${target} libnvm)
         set_target_properties (${target} PROPERTIES OUTPUT_NAME "${binary_name}")
 
         list (APPEND benchmark_targets "${target}")
@@ -195,8 +196,8 @@ macro (make_sisci_benchmark target binary_name files)
     if (CUDA_FOUND AND sisci_include AND sisci_lib AND NOT (no_cuda OR no_sisci))
         cuda_add_executable (${target} ${files} OPTIONS -gencode arch=compute_50,code=sm_50 -D__DIS_CLUSTER__ -D_REENTRANT)
 
-        add_dependencies (${target} libnvme)
-        target_link_libraries (${target} libnvme ${sisci_lib})
+        add_dependencies (${target} libnvm)
+        target_link_libraries (${target} libnvm ${sisci_lib})
         set_target_properties (${target} PROPERTIES OUTPUT_NAME "${binary_name}")
 
         list (APPEND benchmark_targets "${target}")

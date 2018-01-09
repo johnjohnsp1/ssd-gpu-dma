@@ -1,12 +1,12 @@
+#include <nvm_error.h>
 #include <nvm_util.h>
-#include <nvm_types.h>
-#include <nvm_command.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <errno.h>
+#include <string.h>
 
 
-static char* generic_status[] =
+static const char* generic_status[] =
 {
     "Success",
     "Invalid command opcode",
@@ -43,7 +43,8 @@ static char* generic_status[] =
 };
 
 
-static char* generic_status_nvm_commands[] = 
+
+static const char* generic_status_nvm_commands[] = 
 {
     "LBA out of range",
     "Capacity exceeded",
@@ -53,7 +54,8 @@ static char* generic_status_nvm_commands[] =
 };
 
 
-static char* command_specific_status[] = 
+
+static const char* command_specific_status[] = 
 {
     "Completion queue invalid",
     "Invalid queue identifier",
@@ -93,7 +95,8 @@ static char* command_specific_status[] =
 };
 
 
-static char* command_specific_status_nvm_commands[] =
+
+static const char* command_specific_status_nvm_commands[] =
 {
     "Conflicting attributes",
     "Invalid protection information",
@@ -101,7 +104,8 @@ static char* command_specific_status_nvm_commands[] =
 };
 
 
-static char* media_and_data_integrity_nvm_commands[] = 
+
+static const char* media_and_data_integrity_nvm_commands[] = 
 {
     "Write fault",
     "Unrecovered read error",
@@ -114,11 +118,9 @@ static char* media_and_data_integrity_nvm_commands[] =
 };
 
 
-const char* nvm_status(const nvm_cpl_t* cpl)
-{
-    uint8_t status_code_type = SCT(cpl);
-    uint8_t status_code = SC(cpl);
 
+static const char* lookup_string(uint8_t status_code_type, uint8_t status_code)
+{
     switch (status_code_type)
     {
         case 0x00: // Generic command status
@@ -156,71 +158,22 @@ const char* nvm_status(const nvm_cpl_t* cpl)
 }
 
 
-size_t nvm_prp_list(void* vaddr, size_t page_size, size_t size, const uint64_t* lists, const uint64_t* prps)
+
+const char* nvm_strerror(int status)
 {
-    size_t prps_per_page = page_size / sizeof(uint64_t);
-    size_t n_prps = DMA_SIZE(size, page_size) / page_size;
+    int err;
+    uint8_t sct;
+    uint8_t sc;
+    
+    err = NVM_ERR_UNPACK_ERRNO(status);
+    sct = NVM_ERR_UNPACK_SCT(status);
+    sc = NVM_ERR_UNPACK_SC(status);
 
-    size_t i_list = 0;
-    size_t i_prp = 0;
-    size_t pos = 0;
-
-    uint64_t* entries = (uint64_t*) vaddr;
-
-    while (i_prp < n_prps)
+    if (sct != 0 || sc != 0)
     {
-        if ((pos + 1) % prps_per_page == 0)
-        {
-            entries[pos++] = lists[++i_list];
-        }
-
-        entries[pos++] = prps[i_prp++];
+        return lookup_string(sct, sc);
     }
 
-    return i_prp;
-}
-
-
-size_t nvm_prp_num_pages(size_t page_size, size_t transfer_size)
-{
-    size_t prps_per_page = page_size / sizeof(uint64_t) - 1;
-    size_t n_prps = DMA_SIZE(transfer_size, page_size) / page_size;
-    size_t n_prp_pages = 1;
-
-    while (n_prp_pages * prps_per_page + 1 < n_prps)
-    {
-        ++n_prp_pages;
-    }
-
-    return n_prp_pages;
-}
-
-
-size_t nvm_prp_list_size(size_t page_size, size_t transfer_size, size_t mdts)
-{
-    size_t n_pages = nvm_prp_num_pages(page_size, mdts);
-    size_t n_full_lists = transfer_size / mdts;
-    size_t n_overflow = (transfer_size % mdts) >= 2 * page_size;
-
-    return (n_full_lists + n_overflow) * n_pages * page_size;
-}
-
-
-void nvm_cmd_data_ptr(nvm_cmd_t* cmd, uint64_t prp1, uint64_t prp2)
-{
-    cmd->dword[0] &= ~( (0x03 << 14) | (0x03 << 8) );
-
-    cmd->dword[6] = (uint32_t) prp1;
-    cmd->dword[7] = (uint32_t) (prp1 >> 32);
-    cmd->dword[8] = (uint32_t) prp2;
-    cmd->dword[9] = (uint32_t) (prp2 >> 32);
-}
-
-
-void nvm_cmd_header(nvm_cmd_t* cmd, uint8_t opcode, uint32_t ns_id)
-{
-    cmd->dword[0] &= 0xffff0000;
-    cmd->dword[0] |= (0x00 << 14) | (0x00 << 8) | (opcode & 0x7f);
-    cmd->dword[1] = ns_id;
+    return strerror(err);
 }
 

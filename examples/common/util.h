@@ -1,5 +1,5 @@
-#ifndef __DIS_NVM_EXAMPLES_UTIL_H__
-#define __DIS_NVM_EXAMPLES_UTIL_H__
+#ifndef __DISNVM_EXAMPLES_UTIL_H__
+#define __DISNVM_EXAMPLES_UTIL_H__
 
 #include <nvm_types.h>
 #include <stdint.h>
@@ -34,7 +34,7 @@ int parse_u16(const char* str, uint16_t* number, int base);
 /*
  * Pretty print controller information.
  */
-void print_ctrl_info(FILE* fp, const nvm_ctrl_info_t* info);
+void print_ctrl_info(FILE* fp, const struct nvm_ctrl_info* info);
 
 
-#endif // __DIS_NVM_EXAMPLES_UTIL_H__
+#endif // __DISNVM_EXAMPLES_UTIL_H__

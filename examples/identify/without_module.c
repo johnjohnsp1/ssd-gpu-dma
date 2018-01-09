@@ -8,9 +8,9 @@
 #include <stdbool.h>
 #include <nvm_types.h>
 #include <nvm_ctrl.h>
-#include <nvm_manager.h>
-#include <nvm_rpc.h>
 #include <nvm_dma.h>
+#include <nvm_aq.h>
+#include <nvm_rpc.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -74,30 +74,21 @@ static int lookup_ioaddrs(void* ptr, size_t page_size, size_t n_pages, uint64_t*
 }
 
 
-static int execute_identify(nvm_ctrl_t ctrl, nvm_dma_t queues, void* ptr, uint64_t ioaddr)
+static int execute_identify(const nvm_ctrl_t* ctrl, const nvm_dma_t* queues, void* ptr, uint64_t ioaddr)
 {
     int status;
-    nvm_manager_t mngr;
-    nvm_rpc_t rpc;
-    nvm_ctrl_info_t info;
+    nvm_aq_ref ref;
+    struct nvm_ctrl_info info;
 
     fprintf(stderr, "Resetting controller and setting up admin queues...\n");
-    status = nvm_manager_register(&mngr, ctrl, queues);
+    status = nvm_aq_create(&ref, ctrl, queues);
     if (status != 0)
     {
         fprintf(stderr, "Failed to reset controller: %s\n", strerror(errno));
         return 1;
     }
 
-    status = nvm_rpc_bind_local(&rpc, mngr);
-    if (status != 0)
-    {
-        nvm_manager_unregister(mngr);
-        fprintf(stderr, "Failed to create RPC handle: %s\n", strerror(errno));
-        return 1;
-    }
-
-    status = nvm_rpc_ctrl_info(&info, rpc, ctrl, ptr, ioaddr);
+    status = nvm_rpc_ctrl_info(ref, &info, ptr, ioaddr);
     if (status != 0)
     {
         fprintf(stderr, "Failed to identify controller: %s\n", strerror(errno));
@@ -108,17 +99,17 @@ static int execute_identify(nvm_ctrl_t ctrl, nvm_dma_t queues, void* ptr, uint64
     print_ctrl_info(stdout, &info);
 
 out:
-    nvm_rpc_unbind(rpc);
-    nvm_manager_unregister(mngr);
+
+    nvm_aq_destroy(ref);
     return status;
 }
 
 
-static int identify_ctrl(nvm_ctrl_t ctrl)
+static int identify_ctrl(const nvm_ctrl_t* ctrl)
 {
     int status;
-    void* queue_memory;
-    nvm_dma_t window;
+    void* memory;
+    nvm_dma_t* window;
     uint64_t ioaddrs[3];
 
     long page_size = sysconf(_SC_PAGESIZE);
@@ -128,30 +119,30 @@ static int identify_ctrl(nvm_ctrl_t ctrl)
         return 1;
     }
 
-    status = posix_memalign(&queue_memory, ctrl->page_size, 3 * page_size);
+    status = posix_memalign(&memory, ctrl->page_size, 3 * page_size);
     if (status != 0)
     {
         fprintf(stderr, "Failed to allocate page-aligned memory: %s\n", strerror(status));
         return 1;
     }
 
-    status = mlock(queue_memory, 3 * page_size);
+    status = mlock(memory, 3 * page_size);
     if (status != 0)
     {
-        free(queue_memory);
+        free(memory);
         fprintf(stderr, "Failed to page-lock memory: %s\n", strerror(status));
         return 1;
     }
 
-    status = lookup_ioaddrs(queue_memory, page_size, 3, ioaddrs);
+    status = lookup_ioaddrs(memory, page_size, 3, ioaddrs);
     if (status != 0)
     {
-        munlock(queue_memory, 3 * page_size);
-        free(queue_memory);
+        munlock(memory, 3 * page_size);
+        free(memory);
         goto out;
     }
 
-    status = nvm_dma_window_init(&window, ctrl, queue_memory, page_size, 3, ioaddrs);
+    status = nvm_dma_map(&window, ctrl, memory, page_size, 3, ioaddrs);
     if (status != 0)
     {
         fprintf(stderr, "Failed to create DMA window: %s\n", strerror(status));
@@ -159,13 +150,13 @@ static int identify_ctrl(nvm_ctrl_t ctrl)
         goto out;
     }
 
-    status = execute_identify(ctrl, window, ((unsigned char*) queue_memory) + 2*page_size, ioaddrs[2]);
+    status = execute_identify(ctrl, window, ((unsigned char*) memory) + 2 * ctrl->page_size, ioaddrs[2]);
 
-    nvm_dma_window_free(window);
+    nvm_dma_unmap(window);
 
 out:
-    munlock(queue_memory, 3 * page_size);
-    free(queue_memory);
+    munlock(memory, 3 * page_size);
+    free(memory);
     return status;
 }
 
@@ -244,7 +235,7 @@ static void parse_args(int argc, char** argv, struct bdf* device);
 int main(int argc, char** argv)
 {
     int status;
-    nvm_ctrl_t ctrl;
+    nvm_ctrl_t* ctrl;
 
     struct bdf device;
     parse_args(argc, argv, &device);
@@ -284,7 +275,7 @@ int main(int argc, char** argv)
     }
 
     // Get controller reference
-    status = nvm_ctrl_init_userspace(&ctrl, ctrl_registers, NVM_CTRL_MEM_MINSIZE);
+    status = nvm_raw_ctrl_init(&ctrl, ctrl_registers, NVM_CTRL_MEM_MINSIZE);
     if (status != 0)
     {
         munmap((void*) ctrl_registers, NVM_CTRL_MEM_MINSIZE);

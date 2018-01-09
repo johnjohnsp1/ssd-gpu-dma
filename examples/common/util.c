@@ -77,7 +77,7 @@ uint16_t random_id()
 }
 
 
-void print_ctrl_info(FILE* fp, const nvm_ctrl_info_t* info)
+void print_ctrl_info(FILE* fp, const struct nvm_ctrl_info* info)
 {
     unsigned char vendor[4];
     memcpy(vendor, &info->pci_vendor, sizeof(vendor));
@@ -104,7 +104,7 @@ void print_ctrl_info(FILE* fp, const nvm_ctrl_info_t* info)
     fprintf(fp, "Serial Number           : %s\n", serial);
     fprintf(fp, "Model Number            : %s\n", model);
     fprintf(fp, "Firmware revision       : %s\n", revision);
-    fprintf(fp, "Max data transfer size  : %zu\n", info->max_transfer_size);
+    fprintf(fp, "Max data transfer size  : %zu\n", info->max_data_size);
     fprintf(fp, "Max outstanding commands: %zu\n", info->max_out_cmds);
     fprintf(fp, "Max number of namespaces: %zu\n", info->max_n_ns);
     fprintf(fp, "--------------------------------------------------\n");
