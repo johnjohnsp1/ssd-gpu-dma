@@ -36,47 +36,47 @@ static void give_usage(const char* program_name)
 static void parse_opts(int argc, char** argv, struct cl_args* args);
 
 
-static int show_info(nvm_rpc_t rpc, nvm_ctrl_t ctrl, uint32_t adapter)
-{
-    struct segment memory_page;
-    nvm_dma_t dma;
-
-    int status = segment_create(&memory_page, random_id(), 0x1000);
-    if (status != 0)
-    {
-        fprintf(stderr, "Failed to create memory segment\n");
-        return 1;
-    }
-
-    status = dma_create(&dma, ctrl, &memory_page, adapter);
-    if (status != 0)
-    {
-        segment_remove(&memory_page);
-        fprintf(stderr, "Failed to create DMA window\n");
-        return 2;
-    }
-
-    nvm_ctrl_info_t info;
-    status = nvm_rpc_ctrl_info(&info, rpc, ctrl, dma->vaddr, dma->ioaddrs[0]);
-    if (status == 0)
-    {
-        print_ctrl_info(stdout, &info);
-    }
-    else
-    {
-        fprintf(stderr, "RPC command request failed: %s\n", strerror(status));
-    }
-
-    dma_remove(&dma, &memory_page, adapter);
-    segment_remove(&memory_page);
-    return status;
-}
+//static int show_info(nvm_rpc_t rpc, nvm_ctrl_t ctrl, uint32_t adapter)
+//{
+//    struct segment memory_page;
+//    nvm_dma_t dma;
+//
+//    int status = segment_create(&memory_page, random_id(), 0x1000);
+//    if (status != 0)
+//    {
+//        fprintf(stderr, "Failed to create memory segment\n");
+//        return 1;
+//    }
+//
+//    status = dma_create(&dma, ctrl, &memory_page, adapter);
+//    if (status != 0)
+//    {
+//        segment_remove(&memory_page);
+//        fprintf(stderr, "Failed to create DMA window\n");
+//        return 2;
+//    }
+//
+//    nvm_ctrl_info_t info;
+//    status = nvm_rpc_ctrl_info(&info, rpc, ctrl, dma->vaddr, dma->ioaddrs[0]);
+//    if (status == 0)
+//    {
+//        print_ctrl_info(stdout, &info);
+//    }
+//    else
+//    {
+//        fprintf(stderr, "RPC command request failed: %s\n", strerror(status));
+//    }
+//
+//    dma_remove(&dma, &memory_page, adapter);
+//    segment_remove(&memory_page);
+//    return status;
+//}
 
 
 int main(int argc, char** argv)
 {
-    nvm_ctrl_t ctrl;
-    nvm_rpc_t rpc;
+    nvm_ctrl_t* ctrl;
+    nvm_aq_ref rpc;
 
     struct cl_args args;
     parse_opts(argc, argv, &args);
@@ -97,19 +97,19 @@ int main(int argc, char** argv)
         exit(2);
     }
 
-    // Get RPC reference
-    status = nvm_dis_rpc_bind(&rpc, args.mngr_node_id, args.mngr_intr_no, args.mngr_adapter);
-    if (status != 0)
-    {
-        nvm_ctrl_free(ctrl);
-        fprintf(stderr, "Failed to get RPC reference: %s\n", strerror(status));
-        exit(2);
-    }
-
-    status = show_info(rpc, ctrl, args.ctrl_adapter);
-
-    // Free resources and quit
-    nvm_rpc_unbind(rpc);
+//    // Get RPC reference
+//    status = nvm_dis_rpc_bind(&rpc, args.mngr_node_id, args.mngr_intr_no, args.mngr_adapter);
+//    if (status != 0)
+//    {
+//        nvm_ctrl_free(ctrl);
+//        fprintf(stderr, "Failed to get RPC reference: %s\n", strerror(status));
+//        exit(2);
+//    }
+//
+//    status = show_info(rpc, ctrl, args.ctrl_adapter);
+//
+//    // Free resources and quit
+//    nvm_rpc_unbind(rpc);
     nvm_ctrl_free(ctrl);
     SCITerminate();
     exit(status);

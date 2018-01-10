@@ -10,8 +10,8 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <errno.h>
-#include "dis_map.h"
-#include "dis_local.h"
+#include "dis/map.h"
+#include "dis/local.h"
 #include "dprintf.h"
 #include <sisci_types.h>
 #include <sisci_error.h>
@@ -52,7 +52,7 @@ static int create_segment(struct local_memory* m, uint32_t id, size_t size, uint
             return 0;
 
         case SCI_ERR_SEGMENTID_USED:
-            return EBUSY;
+            return EEXIST;
 
         default:
             dprintf("Unknown error while creating local segment: %s\n", SCIGetErrorString(status));

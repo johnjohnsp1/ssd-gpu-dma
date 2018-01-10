@@ -6,7 +6,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <pthread.h>
-#include "ctrl.h"
 
 
 /* Forward declaration */
@@ -78,6 +77,27 @@ int _nvm_ref_get(nvm_aq_ref* handle, const nvm_ctrl_t* ctrl);
  * Free reference wrapper and decrease controller reference.
  */
 void _nvm_ref_put(nvm_aq_ref ref);
+
+
+
+/*
+ * Insert binding handle to server's list of handles.
+ */
+const struct rpc_handle* _nvm_rpc_handle_get(nvm_aq_ref ref, void* data, rpc_deleter_t release);
+
+
+
+/*
+ * Look up RPC binding handle.
+ */
+const struct rpc_handle* _nvm_rpc_handle_find(nvm_aq_ref, void* data);
+
+
+
+/*
+ * Remove RPC binding handle.
+ */
+void _nvm_rpc_handle_put(nvm_aq_ref ref, const struct rpc_handle* handle);
 
 
 

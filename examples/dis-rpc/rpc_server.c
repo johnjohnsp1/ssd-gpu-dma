@@ -1,6 +1,6 @@
 #include <nvm_types.h>
 #include <nvm_ctrl.h>
-#include <nvm_manager.h>
+#include <nvm_aq.h>
 #include <nvm_rpc.h>
 #include <nvm_dma.h>
 #include <nvm_util.h>
@@ -49,7 +49,7 @@ static pthread_mutex_t signal_lk = PTHREAD_MUTEX_INITIALIZER;
 static void give_usage(const char* program_name);
 static void show_help(const char* program_name);
 static void parse_opts(int argc, char** argv, struct cl_args* args);
-static void identify_controller(nvm_ctrl_t ctrl, uint32_t adapter, nvm_manager_t mngr);
+static void identify_controller(const nvm_ctrl_t* ctrl, uint32_t adapter, nvm_aq_ref rpc);
 
 
 /* Signal handler routine */
@@ -67,26 +67,24 @@ static void catch_signal()
 }
 
 
-static bool request_accepter(nvm_cmd_t* cmd, uint32_t node_id, uint32_t adapter, uint32_t intr_no)
+static bool request_accepter(nvm_cmd_t* cmd, uint32_t adapter, uint32_t node_id)
 {
     if (verbose)
     {
-        uint16_t cid = *CMD_CID(cmd);
-        uint8_t opc = _RB(cmd->dword[0], 7, 0);
-        fprintf(stderr, "* Command request from node %u on adapter %u -- cid=0x%04x opc=0x%02x\n", 
-                node_id, adapter, cid, opc);
+        fprintf(stderr, "* Command request received on adapter %u from node %u\n",
+                adapter, node_id);
     }
 
     return true;
 }
 
 
-static int run_service(nvm_ctrl_t ctrl, nvm_dma_t q_wnd, struct cl_args* args)
+static int run_service(const nvm_ctrl_t* ctrl, const nvm_dma_t* q_wnd, const struct cl_args* args)
 {
     int status;
-    nvm_manager_t mngr;
+    nvm_aq_ref rpc;
 
-    status = nvm_manager_register(&mngr, ctrl, q_wnd);
+    status = nvm_aq_create(&rpc, ctrl, q_wnd);
     if (status != 0)
     {
         fprintf(stderr, "Failed to register as manager: %s\n", strerror(status));
@@ -95,28 +93,28 @@ static int run_service(nvm_ctrl_t ctrl, nvm_dma_t q_wnd, struct cl_args* args)
 
     if (args->identify_ctrl)
     {
-        identify_controller(ctrl, args->ctrl_adapter, mngr);
+        identify_controller(ctrl, args->ctrl_adapter, rpc);
     }
 
     for (size_t i_adapter = 0; i_adapter < args->n_dis_adapters; ++i_adapter)
     {
         // Get local node ID
-        uint32_t node_id = 0;
-        status = get_local_node_id(args->dis_adapters[i_adapter], &node_id);
-        if (status != 0)
-        {
-            fprintf(stderr, "Unexpected error while getting local node id\n");
-        }
+//        uint32_t node_id = 0;
+//        status = get_local_node_id(args->dis_adapters[i_adapter], &node_id);
+//        if (status != 0)
+//        {
+//            fprintf(stderr, "Unexpected error while getting local node id\n");
+//        }
 
         // Enable RPC on adapter
-        status = nvm_dis_rpc_enable(mngr, args->dis_adapters[i_adapter], args->intr_no, request_accepter);   
+        status = nvm_dis_rpc_enable(rpc, args->dis_adapters[i_adapter], request_accepter);   
         if (status != 0)
         {
             fprintf(stderr, "Unexpected error: %s\n", strerror(status));
         }
 
-        fprintf(stderr, "Connect RPC client to controller manager on node %u using interrupt %u\n",
-                node_id, args->intr_no);
+//        fprintf(stderr, "Connect RPC client to controller manager on node %u using interrupt %u\n",
+//                node_id, args->intr_no);
     }
 
     // Set current thread in background
@@ -130,16 +128,16 @@ static int run_service(nvm_ctrl_t ctrl, nvm_dma_t q_wnd, struct cl_args* args)
     }
     pthread_mutex_unlock(&signal_lk);
 
-    nvm_manager_unregister(mngr);
+    nvm_aq_destroy(rpc);
     return 0;
 }
 
 
 int main(int argc, char** argv)
 {
-    nvm_ctrl_t ctrl;
+    nvm_ctrl_t* ctrl;
     struct segment segment;
-    nvm_dma_t q_wnd;
+    nvm_dma_t* q_wnd;
 
     struct cl_args args;
     parse_opts(argc, argv, &args);
@@ -190,7 +188,7 @@ int main(int argc, char** argv)
     status = run_service(ctrl, q_wnd, &args);
 
     // Destroy queue memory
-    dma_remove(&q_wnd, &segment, args.ctrl_adapter);
+    dma_remove(q_wnd, &segment, args.ctrl_adapter);
     segment_remove(&segment);
 
     // Put controller reference
@@ -311,12 +309,12 @@ static void parse_opts(int argc, char** argv, struct cl_args* args)
 }
 
 
-static void identify_controller(nvm_ctrl_t ctrl, uint32_t adapter, nvm_manager_t mngr)
+static void identify_controller(const nvm_ctrl_t* ctrl, uint32_t adapter, nvm_aq_ref rpc)
 {
     int status;
     struct segment segment;
-    nvm_dma_t identify_wnd;
-    nvm_rpc_t rpc_ref;
+    nvm_dma_t* identify_wnd;
+    struct nvm_ctrl_info info;
 
     status = segment_create(&segment, random_id(), 0x1000);
     if (status != 0)
@@ -331,24 +329,13 @@ static void identify_controller(nvm_ctrl_t ctrl, uint32_t adapter, nvm_manager_t
         return;
     }
 
-    status = nvm_rpc_bind_local(&rpc_ref, mngr);
-    if (status != 0)
-    {
-        fprintf(stderr, "Failed to bind RPC client to manager: %s\n", strerror(status));
-        dma_remove(&identify_wnd, &segment, adapter);
-        segment_remove(&segment);
-        return;
-    }
-
-    nvm_ctrl_info_t info;
-    status = nvm_rpc_ctrl_info(&info, rpc_ref, ctrl, identify_wnd->vaddr, identify_wnd->ioaddrs[0]);
+    status = nvm_rpc_ctrl_info(rpc, &info, identify_wnd->vaddr, identify_wnd->ioaddrs[0]);
     if (status == 0)
     {
         print_ctrl_info(stdout, &info);
     }
 
-    nvm_rpc_unbind(rpc_ref);
-    dma_remove(&identify_wnd, &segment, adapter);
+    dma_remove(identify_wnd, &segment, adapter);
     segment_remove(&segment);
 }
 

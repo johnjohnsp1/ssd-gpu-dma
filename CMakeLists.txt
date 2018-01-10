@@ -64,7 +64,7 @@ endif ()
 # Library source files
 set (libnvm_root "${PROJECT_SOURCE_DIR}/src")
 file (GLOB libnvm_source "${libnvm_root}/*.c")
-list (REMOVE_ITEM libnvm_source "${libnvm_root}/dis_device.c" "${libnvm_root}/dis_local.c" "${libnvm_root}/dis_map.c")
+file (GLOB libnvm_dis_source "${libnvm_root}/dis/*.c")
 file (GLOB libnvm_include "${PROJECT_BINARY_DIR}/include/*.h" "${PROJECT_SOURCE_DIR}/include/*.h")
 
 # Module source files
@@ -94,18 +94,18 @@ include_directories ("${PROJECT_BINARY_DIR}/include" "${PROJECT_SOURCE_DIR}/incl
 
 
 # Create NVME library target
-if (sisci_include AND sisci_lib AND NOT no_sisci)
-    list (APPEND libnvm_source "${libnvm_root}/dis_device.c" "${libnvm_root}/dis_local.c" "${libnvm_root}/dis_map.c")
-endif ()
 add_library (libnvm SHARED ${libnvm_source})
+target_include_directories (libnvm PRIVATE "${libnvm_root}" "${libnvm_root}/dis")
+
 
 if (sisci_include AND sisci_lib AND NOT no_sisci)
-    list (APPEND libnvm_source "${libnvm_root}/dis_device.c")
-    list (APPEND libnvm_source "${libnvm_root}/dis_local.c" "${libnvm_root}/dis_map.c")
-    target_compile_definitions(libnvm PRIVATE _REENTRANT _SISCI __DIS_CLUSTER__)
+    target_sources (libnvm PRIVATE ${libnvm_dis_source})
+    target_compile_definitions (libnvm PRIVATE _REENTRANT _SISCI __DIS_CLUSTER__)
     target_link_libraries (libnvm ${sisci_lib} Threads::Threads)
+
 else ()
     target_link_libraries (libnvm Threads::Threads)
+
 endif ()
 
 if (CUDA_FOUND AND NOT no_cuda)

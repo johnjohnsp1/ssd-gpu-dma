@@ -10,8 +10,8 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <errno.h>
-#include "dis_map.h"
-#include "dis_device.h"
+#include "dis/map.h"
+#include "dis/device.h"
 #include "dprintf.h"
 #include <sisci_types.h>
 #include <sisci_error.h>

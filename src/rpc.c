@@ -22,7 +22,7 @@
 #include <pthread.h>
 #include <errno.h>
 #include <string.h>
-#include "dis_device.h"
+#include "dis/device.h"
 #include "rpc.h"
 #include "ctrl.h"
 #include "util.h"
@@ -261,29 +261,30 @@ int nvm_raw_rpc(nvm_aq_ref ref, nvm_cmd_t* cmd, nvm_cpl_t* cpl)
 
 
 
-int nvm_rpc_bind(nvm_aq_ref ref, void* data, rpc_deleter_t release, rpc_stub_t stub)
-{
-    int err;
-
-    err = pthread_mutex_lock(&ref->lock);
-    if (err != 0)
-    {
-        dprintf("Failed to take reference lock\n");
-        return EBADF;
-    }
-
-    if (ref->data != NULL || ref->stub != NULL)
-    {
-        pthread_mutex_unlock(&ref->lock);
-        return EINVAL;
-    }
-
-    ref->data = data;
-    ref->release = release;
-    ref->stub = stub;
-
-    return 0;
-}
+//int _nvm_rpc_bind(nvm_aq_ref ref, void* data, rpc_deleter_t release, rpc_stub_t stub)
+//{
+//    int err;
+//
+//    err = pthread_mutex_lock(&ref->lock);
+//    if (err != 0)
+//    {
+//        dprintf("Failed to take reference lock\n");
+//        return EBADF;
+//    }
+//
+//    if (ref->data != NULL || ref->stub != NULL)
+//    {
+//        pthread_mutex_unlock(&ref->lock);
+//        return EINVAL;
+//    }
+//
+//    ref->data = data;
+//    ref->release = release;
+//    ref->stub = stub;
+//
+//    pthread_mutex_unlock(&ref->lock);
+//    return 0;
+//}
 
 
 

@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <nvm_types.h>
 #include <nvm_dma.h>
+#include <nvm_util.h>
 #include <sisci_types.h>
 #include <sisci_api.h>
 #include <sisci_error.h>
@@ -33,14 +34,6 @@ int segment_create(struct segment* segment, uint32_t segment_id, size_t size)
         return ENOSPC;
     }
 
-    segment->vaddr = SCIMapLocalSegment(segment->segment, &segment->map, 0, size, NULL, 0, &err);
-    if (err != SCI_ERR_OK)
-    {
-        SCIRemoveSegment(segment->segment, 0, &status);
-        SCIClose(segment->sd, 0, &status);
-        return EIO;
-    }
-
     segment->id = segment_id;
     segment->size = size;
     return 0;
@@ -50,14 +43,6 @@ int segment_create(struct segment* segment, uint32_t segment_id, size_t size)
 void segment_remove(struct segment* segment)
 {
     sci_error_t err;
-
-    segment->vaddr = NULL;
-
-    do
-    {
-        SCIUnmapSegment(segment->map, 0, &err);
-    }
-    while (err == SCI_ERR_BUSY);
 
     do
     {
@@ -69,7 +54,7 @@ void segment_remove(struct segment* segment)
 }
 
 
-int dma_create(nvm_dma_t* window, nvm_ctrl_t ctrl, struct segment* segment, uint32_t adapter)
+int dma_create(nvm_dma_t** window, const nvm_ctrl_t* ctrl, struct segment* segment, uint32_t adapter)
 {
     sci_error_t err;
 
@@ -85,7 +70,7 @@ int dma_create(nvm_dma_t* window, nvm_ctrl_t ctrl, struct segment* segment, uint
         return EIO;
     }
 
-    int status = nvm_dis_dma_window_init(window, ctrl, adapter, segment->segment, segment->vaddr, segment->size);
+    int status = nvm_dis_dma_map_local(window, ctrl, adapter, segment->segment, segment->size, true);
     if (status != 0)
     {
         do
@@ -105,7 +90,7 @@ void dma_remove(nvm_dma_t* window, struct segment* segment, uint32_t adapter)
 {
     sci_error_t err;
 
-    nvm_dma_window_free(*window);
+    nvm_dma_unmap(window);
 
     do
     {

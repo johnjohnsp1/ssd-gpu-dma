@@ -10,9 +10,9 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <errno.h>
-#include "dis_map.h"
-#include "dis_local.h"
-#include "dis_device.h"
+#include "dis/map.h"
+#include "dis/local.h"
+#include "dis/device.h"
 #include "dprintf.h"
 #include <sisci_types.h>
 #include <sisci_error.h>
@@ -127,8 +127,22 @@ int _nvm_io_map_local(struct io_map* m, sci_device_t device, sci_local_segment_t
     m->adapter = adapter;
     m->ioaddr = 0;
 
+    SCISetSegmentAvailable(m->lsegment, m->adapter, 0, &err);
+    switch (err)
+    {
+        case SCI_ERR_OK:
+            break;
+
+        case SCI_ERR_ILLEGAL_OPERATION:
+        case SCI_ERR_SEGMENT_NOT_PREPARED:
+            return EINVAL;
+
+        default:
+            dprintf("Failed to set segment available: %s\n", SCIGetErrorString(err));
+            return EIO;
+    }
+
     SCIMapLocalSegmentForDevice(m->lsegment, m->adapter, m->device, &m->ioaddr, 0, 0, &err);
-    
     if (err != SCI_ERR_OK)
     {
         dprintf("Failed to map segment for device: %s\n", SCIGetErrorString(err));
@@ -197,14 +211,14 @@ void _nvm_io_unmap(struct io_map* m)
             break;
     }
 
-    m->type = _IO_MAP_NOT_MAPPED;
-
 #ifndef NDEBUG
     if (err != SCI_ERR_OK)
     {
         dprintf("Unmapping segment for device failed: %s\n", SCIGetErrorString(err));
     }
 #endif
+
+    m->type = _IO_MAP_NOT_MAPPED;
 }
 
 
@@ -221,11 +235,10 @@ int _nvm_io_map_local_memory(struct io_map* m, const struct device* dev, const s
     sci_error_t err = SCI_ERR_OK;
 
     SCIPrepareSegment(mem->segment, adapter, 0, &err);
-
     if (err != SCI_ERR_OK)
     {
         dprintf("Failed to prepare local segment: %s\n", SCIGetErrorString(err));
-        return EIO;
+        return ENOSPC;
     }
 
     return _nvm_io_map_local(m, dev->device, mem->segment, adapter);

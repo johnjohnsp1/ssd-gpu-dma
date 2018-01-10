@@ -62,7 +62,7 @@ enum io_map_type
 {
     _IO_MAP_NOT_MAPPED      = 0x00,
     _IO_MAP_MAPPED_REMOTE   = 0x01,
-    _IO_MAP_MAPPED_LOCAL    = 0x02
+    _IO_MAP_MAPPED_LOCAL    = 0x02,
 };
 
 /*

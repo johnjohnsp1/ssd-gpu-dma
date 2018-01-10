@@ -1,10 +1,9 @@
-#ifdef _SISCI
-#include <sisci_api.h>
-#include <sisci_types.h>
-#include <sisci_error.h>
+#ifndef _SISCI
+#error "Must compile with SISCI support"
+#endif
+
 #ifndef __DIS_CLUSTER__
 #define __DIS_CLUSTER__
-#endif
 #endif
 
 #include <nvm_types.h>
@@ -19,15 +18,53 @@
 #include <errno.h>
 #include <string.h>
 #include <pthread.h>
+#include "rpc.h"
 #include "regs.h"
 #include "ctrl.h"
 #include "dprintf.h"
+#include <sisci_types.h>
+#include <sisci_error.h>
+#include <sisci_api.h>
+
 
 #define RPC_COMMAND_TIMEOUT     2500
 
 
+struct dis_rpc_data
+{
+
+};
 
 
+
+int nvm_dis_rpc_enable(nvm_aq_ref ref, uint32_t adapter, nvm_dis_rpc_cb_t filter)
+{
+    int err = pthread_mutex_lock(&ref->lock);
+    if (err != 0)
+    {
+        dprintf("Failed to take reference lock\n");
+        return EBADF;
+    }
+
+
+    pthread_mutex_unlock(&ref->lock);
+    return 0;
+}
+
+
+
+void nvm_dis_rpc_disable(nvm_aq_ref ref, uint32_t adapter)
+{
+    int err = pthread_mutex_lock(&ref->lock);
+    if (err != 0)
+    {
+        dprintf("Failed to take reference lock\n");
+        return;
+    }
+
+
+    pthread_mutex_unlock(&ref->lock);
+}
 
 
 

@@ -21,9 +21,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include "ioctl.h"
-#include "dis_map.h"
-#include "dis_local.h"
-#include "dis_device.h"
+#include "dis/map.h"
+#include "dis/local.h"
+#include "dis/device.h"
 #include "ctrl.h"
 #include "util.h"
 #include "regs.h"
@@ -446,7 +446,6 @@ void nvm_dma_unmap(nvm_dma_t* handle)
         case _DMA_TYPE_SMARTIO:
             remove_mapping(outer->mapping);
             break;
-            
 #endif
 
         case _DMA_TYPE_IOCTL_HOST:
@@ -458,7 +457,7 @@ void nvm_dma_unmap(nvm_dma_t* handle)
 #endif
 
         default:
-            dprintf("Unknown DMA mapping type\n");
+            dprintf("Unknown DMA mapping type for handle at address %p\n", handle);
             break;
     }
 

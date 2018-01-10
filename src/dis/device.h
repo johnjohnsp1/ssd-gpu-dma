@@ -18,7 +18,7 @@ struct device_memory;
 #include <stddef.h>
 #include <stdint.h>
 #include <sisci_types.h>
-#include "dis_map.h"
+#include "dis/map.h"
 
 
 

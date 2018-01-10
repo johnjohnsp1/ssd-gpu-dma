@@ -10,16 +10,6 @@ extern "C" {
 #include <stdbool.h>
 
 
-/*
- * Callback function invoked whenever a remote NVM admin command is received.
- * Should indicate whether or not a remote admin command is accepted and can
- * be enqueued by using the return value.
- *
- * The remote command can also be modified if necessary.
- */
-typedef bool (*nvm_rpc_cb_t)(nvm_cmd_t* cmd, void* data);
-
-
 
 /*
  * Create admin queue pair
@@ -53,12 +43,23 @@ void nvm_aq_destroy(nvm_aq_ref ref);
 #ifdef __DIS_CLUSTER__
 
 /*
+ * Callback function invoked whenever a remote NVM admin command is received.
+ * Should indicate whether or not a remote admin command is accepted and can
+ * be enqueued by using the return value.
+ *
+ * The remote command can also be modified if necessary.
+ */
+typedef bool (*nvm_dis_rpc_cb_t)(nvm_cmd_t* cmd, uint32_t dis_adapter, uint32_t dis_node_id);
+
+
+
+/*
  * Enable remote admin commands.
  * Allows remote processes to relay NVM admin commands to the local process.
  */
 int nvm_dis_rpc_enable(nvm_aq_ref ref,               // NVM admin queue-pair reference
                        uint32_t dis_adapter,         // Local adapter to enable interrupt on
-                       nvm_rpc_cb_t filter);         // Filter callback (can be NULL)
+                       nvm_dis_rpc_cb_t filter);     // Filter callback (can be NULL)
 
 
 
@@ -66,7 +67,7 @@ int nvm_dis_rpc_enable(nvm_aq_ref ref,               // NVM admin queue-pair ref
  * Disable remote admin commands.
  * Stop processing admin commands from remote processes.
  */
-int nvm_dis_rpc_disable(nvm_aq_ref ref, uint32_t dis_adapter);
+void nvm_dis_rpc_disable(nvm_aq_ref ref, uint32_t dis_adapter);
 
 #endif /* __DIS_CLUSTER__ */
 

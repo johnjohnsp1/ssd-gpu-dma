@@ -16,9 +16,7 @@ struct segment
     uint32_t            id;         // Segment ID
     sci_desc_t          sd;         // SISCI virtual device
     sci_local_segment_t segment;    // Local segment descriptor
-    sci_map_t           map;        // Memory-map descriptor
     size_t              size;       // Size of segment
-    void*               vaddr;      // Pointer to mapped memory
 };
 
 
@@ -39,7 +37,7 @@ void segment_remove(struct segment* segment);
 /*
  * Create a DMA window for the segment.
  */
-int dma_create(nvm_dma_t* dma_window, nvm_ctrl_t ctrl, struct segment* segment, uint32_t dis_adapter);
+int dma_create(nvm_dma_t** dma_window, const nvm_ctrl_t* ctrl, struct segment* segment, uint32_t dis_adapter);
 
 
 

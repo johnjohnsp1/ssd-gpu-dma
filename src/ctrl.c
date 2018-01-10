@@ -18,7 +18,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <stdio.h>
-#include "dis_device.h"
+#include "dis/device.h"
 #include "ctrl.h"
 #include "util.h"
 #include "regs.h"
