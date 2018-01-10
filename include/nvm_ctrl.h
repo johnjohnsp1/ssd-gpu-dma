@@ -72,7 +72,6 @@ int nvm_raw_ctrl_reset(const nvm_ctrl_t* ctrl, uint64_t acq_ioaddr, uint64_t asq
 
 
 #ifdef __DIS_CLUSTER__
-
 /* 
  * Initialize NVM controller handle.
  *
@@ -80,41 +79,8 @@ int nvm_raw_ctrl_reset(const nvm_ctrl_t* ctrl, uint64_t acq_ioaddr, uint64_t asq
  * This function should be used when SmartIO is being used.
  */
 int nvm_dis_ctrl_init(nvm_ctrl_t** ctrl, uint64_t smartio_dev_id, uint32_t dis_adapter);
-
-
-
-/* 
- * Retrieve SmartIO device reference.
- *
- * Get the SmartIO device reference used internally for connecting to the 
- * physical controller. 
- *
- * The reference will be the same reference as used internally, which
- * means that if the controller handle is destroyed, the reference will no
- * longer be valid.
- */
-int nvm_dis_ctrl_device(const nvm_ctrl_t* ctrl, sci_device_t* dev);
-
-
-
-/*
- * Get segment local to the controller.
- *
- * Create a segment local to the controller device and retrieve a remote 
- * remote segment reference. The remote segment can then be passed to the 
- * nvm_dis_dma_map_remote() function.
- *
- * Note: the caller must also call the corresponding put function.
- */
-//int nvm_dis_ctrl_get_segment(const nvm_ctrl_t* ctrl, 
-//                             sci_remote_segment_t* segment, 
-//                             uint32_t segment_no, 
-//                             bool shared);
-//
-//
-//void nvm_dis_ctrl_put_segment(const nvm_ctrl_t* ctrl, sci_remote_segment_t segment);
-
 #endif
+
 
 
 #ifdef __cplusplus

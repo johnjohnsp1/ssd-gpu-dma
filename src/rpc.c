@@ -22,7 +22,7 @@
 #include <pthread.h>
 #include <errno.h>
 #include <string.h>
-#include "dev.h"
+#include "dis_device.h"
 #include "rpc.h"
 #include "ctrl.h"
 #include "util.h"

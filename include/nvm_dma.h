@@ -100,12 +100,16 @@ int nvm_dma_map_device(nvm_dma_t** map, const nvm_ctrl_t* ctrl, void* devptr, si
  */
 int nvm_dis_dma_map_local(nvm_dma_t** map,              // Mapping descriptor reference
                           const nvm_ctrl_t* ctrl,       // NVM controller handle
-                          uint32_t dis_adapter,         // Local DIS adapter number
+                          uint32_t dis_adapter,         // Local DIS adapter
                           sci_local_segment_t segment,  // Local segment descriptor
-                          void* vaddr,                  // Mapped segment memory (can be NULL if not required)
-                          size_t size);                 // Mapping size
+                          size_t size,                  // Size of segment
+                          bool map_vaddr);              // Should function also map segment into local space
+
+#endif /* __DIS_CLUSTER__ */
 
 
+
+#if defined( __DIS_CLUSTER__ )
 
 /*
  * Create DMA mapping descriptor from remote SISCI segment.
@@ -115,22 +119,62 @@ int nvm_dis_dma_map_local(nvm_dma_t** map,              // Mapping descriptor re
  * This function is similar to nvm_dis_dma_map_local.
  *
  * The remote segment must already be connected.
+ *
+ * Note: vaddr can be NULL.
  */
-int nvm_dis_dma_map_remote(nvm_dma_t** map,            // Mapping descriptor reference
-                           const nvm_ctrl_t* ctrl,     // NVM controller handle
-                           sci_remote_segment_t segment,    // Remote segment descriptor
-                           void* vaddr,                 // Mapped segment memory (can be NULL if not required)
-                           size_t size);                // Mapping size
+int nvm_dis_dma_map_remote(nvm_dma_t** map,             // Mapping descriptor reference
+                           const nvm_ctrl_t* ctrl,      // NVM controller handle
+                           sci_remote_segment_t segment,// Remote segment descriptor
+                           bool map_vaddr,              // Should function also map segment into local space
+                           bool map_wc);                // Should function map with write combining
+
+#endif /* __DIS_CLUSTER__ */
 
 
 
-int nvm_dis_dma_segment(nvm_dma_t** map,
+#if defined( __DIS_CLUSTER__ )
+
+/*
+ * Create segment and map it for the controller.
+ * Short-hand function for creating a local segment.
+ */
+int nvm_dis_dma_create(nvm_dma_t** map,
+                       const nvm_ctrl_t* ctrl,
+                       uint32_t dis_adapter,
+                       uint32_t id,
+                       size_t size);
+
+#endif /* __DIS_CLUSTER__ */
+
+
+
+#if defined( __DIS_CLUSTER__ )
+
+/* 
+ * Connect to device memory.
+ * Short-hand function for connecting to device memory.
+ */
+int nvm_dis_dma_connect(nvm_dma_t** map,
                         const nvm_ctrl_t* ctrl,
-                        size_t size,
                         uint32_t segment_no,
+                        size_t size,
                         bool shared);
 
 #endif /* __DIS_CLUSTER__ */
+
+
+
+#if ( ( defined( __CUDA__ ) || defined( __CUDACC__ ) ) && defined( __DIS_CLUSTER__ ) )
+
+int nvm_dis_dma_map_device(nvm_dma_t** map, 
+                           const nvm_ctrl_t* ctrl, 
+                           uint32_t dis_adapter,
+                           uint32_t id,
+                           void* devptr,
+                           size_t size);
+
+#endif /* __DIS_CLUSTER__ && __CUDA__ */
+
 
 
 #ifdef __cplusplus
