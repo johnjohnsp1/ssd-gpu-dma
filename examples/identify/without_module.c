@@ -10,7 +10,7 @@
 #include <nvm_ctrl.h>
 #include <nvm_dma.h>
 #include <nvm_aq.h>
-#include <nvm_rpc.h>
+#include <nvm_admin.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -88,7 +88,7 @@ static int execute_identify(const nvm_ctrl_t* ctrl, const nvm_dma_t* queues, voi
         return 1;
     }
 
-    status = nvm_rpc_ctrl_info(ref, &info, ptr, ioaddr);
+    status = nvm_admin_ctrl_info(ref, &info, ptr, ioaddr);
     if (status != 0)
     {
         fprintf(stderr, "Failed to identify controller: %s\n", strerror(errno));

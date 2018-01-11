@@ -453,7 +453,11 @@ int nvm_aq_create(nvm_aq_ref* handle, const nvm_ctrl_t* ctrl, const nvm_dma_t* w
 
 void nvm_aq_destroy(nvm_aq_ref ref)
 {
-    _nvm_ref_put(ref);
+    if (ref->stub == (rpc_stub_t) execute_command)
+    {
+        // TODO: send abort command
+        _nvm_ref_put(ref);
+    }
 }
 
 
@@ -485,5 +489,15 @@ int _nvm_local_admin(nvm_aq_ref ref, const nvm_cmd_t* cmd, nvm_cpl_t* cpl)
 
     pthread_mutex_unlock(&ref->lock);
     return NVM_ERR_PACK(NULL, err);
+}
+
+
+
+void nvm_rpc_unbind(nvm_aq_ref ref)
+{
+    if (ref->stub != (rpc_stub_t) execute_command)
+    {
+        _nvm_ref_put(ref);
+    }
 }
 

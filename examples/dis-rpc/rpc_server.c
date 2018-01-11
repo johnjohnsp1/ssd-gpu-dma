@@ -1,7 +1,7 @@
 #include <nvm_types.h>
 #include <nvm_ctrl.h>
 #include <nvm_aq.h>
-#include <nvm_rpc.h>
+#include <nvm_admin.h>
 #include <nvm_dma.h>
 #include <nvm_util.h>
 #include <stddef.h>
@@ -303,7 +303,7 @@ static void identify_controller(const nvm_ctrl_t* ctrl, uint32_t adapter, nvm_aq
         return;
     }
 
-    status = nvm_rpc_ctrl_info(rpc, &info, identify_wnd->vaddr, identify_wnd->ioaddrs[0]);
+    status = nvm_admin_ctrl_info(rpc, &info, identify_wnd->vaddr, identify_wnd->ioaddrs[0]);
     if (status == 0)
     {
         print_ctrl_info(stdout, &info);

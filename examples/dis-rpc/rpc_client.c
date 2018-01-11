@@ -1,8 +1,8 @@
 #include <nvm_types.h>
 #include <nvm_ctrl.h>
 #include <nvm_rpc.h>
-#include <nvm_aq.h>
 #include <nvm_dma.h>
+#include <nvm_admin.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -55,7 +55,7 @@ static int show_info(nvm_aq_ref rpc, const nvm_ctrl_t* ctrl, uint32_t adapter)
     }
 
     struct nvm_ctrl_info info;
-    status = nvm_rpc_ctrl_info(rpc, &info, dma->vaddr, dma->ioaddrs[0]);
+    status = nvm_admin_ctrl_info(rpc, &info, dma->vaddr, dma->ioaddrs[0]);
     if (status == 0)
     {
         print_ctrl_info(stdout, &info);
@@ -107,7 +107,7 @@ int main(int argc, char** argv)
     status = show_info(rpc, ctrl, args.adapter);
 
     // Free resources and quit
-    nvm_aq_destroy(rpc);
+    nvm_rpc_unbind(rpc);
     nvm_ctrl_free(ctrl);
     SCITerminate();
     exit(status);

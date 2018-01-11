@@ -9,13 +9,14 @@
 #include <stdbool.h>
 #include <string.h>
 #include <errno.h>
+#include "admin.h"
 #include "rpc.h"
 #include "regs.h"
 #include "dprintf.h"
 
 
 
-void nvm_admin_cq_create(nvm_cmd_t* cmd, const nvm_queue_t* cq)
+void _nvm_admin_cq_create(nvm_cmd_t* cmd, const nvm_queue_t* cq)
 {
     nvm_cmd_header(cmd, NVM_ADMIN_CREATE_COMPLETION_QUEUE, 0);
     nvm_cmd_data_ptr(cmd, cq->ioaddr, 0);
@@ -26,7 +27,7 @@ void nvm_admin_cq_create(nvm_cmd_t* cmd, const nvm_queue_t* cq)
 
 
 
-void nvm_admin_sq_create(nvm_cmd_t* cmd, const nvm_queue_t* sq, const nvm_queue_t* cq)
+void _nvm_admin_sq_create(nvm_cmd_t* cmd, const nvm_queue_t* sq, const nvm_queue_t* cq)
 {
     nvm_cmd_header(cmd, NVM_ADMIN_CREATE_SUBMISSION_QUEUE, 0);
     nvm_cmd_data_ptr(cmd, sq->ioaddr, 0);
@@ -37,7 +38,7 @@ void nvm_admin_sq_create(nvm_cmd_t* cmd, const nvm_queue_t* sq, const nvm_queue_
 
 
 
-void nvm_admin_current_num_queues(nvm_cmd_t* cmd, bool set, uint16_t n_cqs, uint16_t n_sqs)
+void _nvm_admin_current_num_queues(nvm_cmd_t* cmd, bool set, uint16_t n_cqs, uint16_t n_sqs)
 {
     nvm_cmd_header(cmd, set ? NVM_ADMIN_SET_FEATURES : NVM_ADMIN_GET_FEATURES, 0);
     nvm_cmd_data_ptr(cmd, 0, 0);
@@ -48,7 +49,7 @@ void nvm_admin_current_num_queues(nvm_cmd_t* cmd, bool set, uint16_t n_cqs, uint
 
 
 
-void nvm_admin_identify_ctrl(nvm_cmd_t* cmd, uint64_t ioaddr)
+void _nvm_admin_identify_ctrl(nvm_cmd_t* cmd, uint64_t ioaddr)
 {
     nvm_cmd_header(cmd, NVM_ADMIN_IDENTIFY, 0);
     nvm_cmd_data_ptr(cmd, ioaddr, 0);
@@ -59,7 +60,7 @@ void nvm_admin_identify_ctrl(nvm_cmd_t* cmd, uint64_t ioaddr)
 
 
 
-void nvm_admin_identify_ns(nvm_cmd_t* cmd, uint32_t ns_id, uint64_t ioaddr)
+void _nvm_admin_identify_ns(nvm_cmd_t* cmd, uint32_t ns_id, uint64_t ioaddr)
 {
     nvm_cmd_header(cmd, NVM_ADMIN_IDENTIFY, ns_id);
     nvm_cmd_data_ptr(cmd, ioaddr, 0);
@@ -70,7 +71,7 @@ void nvm_admin_identify_ns(nvm_cmd_t* cmd, uint32_t ns_id, uint64_t ioaddr)
 
 
 
-int nvm_rpc_ctrl_info(nvm_aq_ref ref, struct nvm_ctrl_info* info, void* ptr, uint64_t ioaddr)
+int nvm_admin_ctrl_info(nvm_aq_ref ref, struct nvm_ctrl_info* info, void* ptr, uint64_t ioaddr)
 {
     if (info == NULL)
     {
@@ -96,7 +97,7 @@ int nvm_rpc_ctrl_info(nvm_aq_ref ref, struct nvm_ctrl_info* info, void* ptr, uin
 
     nvm_cmd_t cmd;
     memset(&cmd, 0, sizeof(cmd));
-    nvm_admin_identify_ctrl(&cmd, ioaddr);
+    _nvm_admin_identify_ctrl(&cmd, ioaddr);
 
     nvm_cpl_t cpl;
     memset(&cpl, 0, sizeof(cpl));
