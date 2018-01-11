@@ -9,15 +9,15 @@
 
 
 /* Forward declaration */
-struct device;
 struct nvm_admin_reference;
 struct local_admin;
+
 
 
 /*
  * Callback to delete custom instance data.
  */
-typedef void (*rpc_deleter_t)(const struct nvm_admin_reference*, void*);
+typedef void (*rpc_deleter_t)(void* data, uint32_t key, int remaining_handles);
 
 
 
@@ -35,34 +35,9 @@ typedef int (*rpc_stub_t)(void*, nvm_cmd_t*, nvm_cpl_t*);
 
 
 /*
- * Linked list of RPC server-side binding handles.
+ * Get internal controller reference from RPC reference.
  */
-struct rpc_handle
-{
-    struct rpc_handle*  next;       // Pointer to next handle in list
-    void*               data;       // Custom instance data
-    rpc_deleter_t       release;    // Callback to release the instance data
-};
-
-
-
-/*
- * Administration queue-pair reference.
- *
- * Represents either a reference to a remote descriptor, or is a local 
- * descriptor. In other words, this handle represents both RPC clients and
- * RPC servers.
- */
-struct nvm_admin_reference
-{
-    const nvm_ctrl_t*       ctrl;       // Controller reference
-    pthread_mutex_t         lock;       // Ensure exclusive access to the reference
-    struct rpc_handle*      handles;    // Linked list of binding handles (if server)
-    struct rpc_server*      server;     // If not NULL, this is a local reference
-    void*                   data;       // Custom instance data
-    rpc_deleter_t           release;    // Callback to release instance data
-    rpc_stub_t              stub;       // Client-side stub
-};
+const nvm_ctrl_t* _nvm_ctrl_from_aq_ref(const struct nvm_admin_reference*);
 
 
 
@@ -82,27 +57,22 @@ void _nvm_ref_put(nvm_aq_ref ref);
 
 /*
  * Insert binding handle to server's list of handles.
+ * If key is already found, this function will fail.
  */
-const struct rpc_handle* _nvm_rpc_handle_get(nvm_aq_ref ref, void* data, rpc_deleter_t release);
+int _nvm_rpc_handle_insert(nvm_aq_ref ref, uint32_t key, void* data, rpc_deleter_t release);
 
 
 
 /*
- * Look up RPC binding handle.
+ * Remove local binding handle.
+ * This function will call the release callback.
  */
-const struct rpc_handle* _nvm_rpc_handle_find(nvm_aq_ref, void* data);
+void _nvm_rpc_handle_remove(nvm_aq_ref ref, uint32_t key);
 
 
 
 /*
- * Remove RPC binding handle.
- */
-void _nvm_rpc_handle_put(nvm_aq_ref ref, const struct rpc_handle* handle);
-
-
-
-/*
- * Bind reference to remote binding handle.
+ * Bind reference to remote handle.
  */
 int _nvm_rpc_bind(nvm_aq_ref ref, void* data, rpc_deleter_t deleter, rpc_stub_t stub);
 
@@ -111,7 +81,7 @@ int _nvm_rpc_bind(nvm_aq_ref ref, void* data, rpc_deleter_t deleter, rpc_stub_t 
 /*
  * Execute a local admin command.
  */
-int _nvm_local_admin(struct local_admin* aqd, const nvm_cmd_t* cmd, nvm_cpl_t* cpl);
+int _nvm_local_admin(nvm_aq_ref ref, const nvm_cmd_t* cmd, nvm_cpl_t* cpl);
 
 
 

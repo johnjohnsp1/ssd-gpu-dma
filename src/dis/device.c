@@ -103,7 +103,7 @@ static int connect_segment(struct device_memory* mem,
         goto release;
     }
 
-    status = _nvm_va_map_remote(&mem->va_mapping, size, mem->segment, write, true);
+    status = _nvm_va_map_remote(&mem->va_mapping, size, mem->segment, write, false);
     if (status != 0)
     {
         goto disconnect;

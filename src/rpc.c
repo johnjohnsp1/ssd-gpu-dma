@@ -43,7 +43,135 @@ struct local_admin
 
 
 /*
+ * Linked list of RPC server-side binding handles.
+ */
+struct rpc_handle
+{
+    struct rpc_handle*  next;       // Pointer to next handle in list
+    uint32_t            key;        // Handle key
+    void*               data;       // Custom instance data
+    rpc_deleter_t       release;    // Callback to release the instance data
+};
+
+
+
+/*
+ * Administration queue-pair reference.
+ *
+ * Represents either a reference to a remote descriptor, or is a local 
+ * descriptor. In other words, this handle represents both RPC clients and
+ * RPC servers.
+ */
+struct nvm_admin_reference
+{
+    const nvm_ctrl_t*       ctrl;       // Controller reference
+    pthread_mutex_t         lock;       // Ensure exclusive access to the reference
+    int                     n_handles;  // Number of handles
+    struct rpc_handle*      handles;    // Linked list of binding handles (if server)
+    void*                   data;       // Custom instance data
+    rpc_deleter_t           release;    // Callback to release instance data
+    rpc_stub_t              stub;       // Client-side stub
+};
+
+
+
+int _nvm_rpc_handle_insert(nvm_aq_ref ref, uint32_t key, void* data, rpc_deleter_t release)
+{
+    if (data == NULL || release == NULL)
+    {
+        return EINVAL;
+    }
+
+    struct rpc_handle* handle = (struct rpc_handle*) malloc(sizeof(struct rpc_handle));
+    if (handle == NULL)
+    {
+        dprintf("Failed to allocate binding handle: %s\n", strerror(errno));
+        return ENOMEM;
+    }
+
+    handle->next = NULL;
+    handle->key = key;
+    handle->data = data;
+    handle->release = release;
+
+    int err = pthread_mutex_lock(&ref->lock);
+    if (err != 0)
+    {
+        free(handle);
+        dprintf("Failed to take reference lock: %s\n", strerror(err));
+        return err;
+    }
+
+    struct rpc_handle* prev = NULL;
+    struct rpc_handle* curr = ref->handles;
+
+    while (curr != NULL)
+    {
+        if (curr->key == handle->key)
+        {
+            pthread_mutex_unlock(&ref->lock);
+            free(handle);
+            dprintf("Handle already inserted\n");
+            return EINVAL;
+        }
+
+        prev = curr;
+        curr = curr->next;
+    }
+
+    if (prev != NULL)
+    {
+        prev->next = handle;
+    }
+    else
+    {
+        ref->handles = handle;
+    }
+
+    ++ref->n_handles;
+
+    pthread_mutex_unlock(&ref->lock);
+    return 0;
+}
+
+
+
+void _nvm_rpc_handle_remove(nvm_aq_ref ref, uint32_t key)
+{
+    pthread_mutex_lock(&ref->lock);
+
+    struct rpc_handle* prev = NULL;
+    struct rpc_handle* curr = ref->handles;
+
+    while (curr != NULL && curr->key != key)
+    {
+        prev = curr;
+        curr = curr->next;
+    }
+
+    if (prev != NULL)
+    {
+        prev->next = curr->next;
+    }
+    else
+    {
+        ref->handles = curr->next;
+    }
+
+    if (curr != NULL)
+    {
+        curr->release(curr->data, curr->key, --ref->n_handles);
+        free(curr);
+    }
+
+    pthread_mutex_unlock(&ref->lock);
+}
+
+
+
+/*
  * Helper function to remove all server handles.
+ * Lock must be held when calling this.
  */
 static void release_handles(nvm_aq_ref ref)
 {
@@ -58,12 +186,7 @@ static void release_handles(nvm_aq_ref ref)
         {
             curr = next;
             next = curr->next;
-
-            if (curr->release != NULL)
-            {
-                curr->release(ref, curr->data);
-            }
-
+            curr->release(curr->data, curr->key, --ref->n_handles);
             free(curr);
         }
 
@@ -72,13 +195,12 @@ static void release_handles(nvm_aq_ref ref)
 }
 
 
+
 /* 
  * Helper function to allocate an admin reference.
  */
 int _nvm_ref_get(nvm_aq_ref* handle, const nvm_ctrl_t* ctrl)
 {
-    int err;
-
     *handle = NULL;
 
     nvm_aq_ref ref = (nvm_aq_ref) malloc(sizeof(struct nvm_admin_reference));
@@ -88,43 +210,22 @@ int _nvm_ref_get(nvm_aq_ref* handle, const nvm_ctrl_t* ctrl)
         return ENOMEM;
     }
 
-    err = pthread_mutex_init(&ref->lock, NULL);
+    int err = pthread_mutex_init(&ref->lock, NULL);
     if (err != 0)
     {
+        free(ref);
         dprintf("Failed to initialize reference lock: %s\n", strerror(err));
-        goto free_handle;
+        return err;
     }
 
-    //ref->device = NULL;
     ref->ctrl = ctrl;
     ref->handles = NULL;
     ref->data = NULL;
     ref->release = NULL;
     ref->stub = NULL;
 
-//#ifdef _SISCI
-//    if (_nvm_device_from_ctrl(ctrl) != NULL)
-//    {
-//        err = _nvm_device_dup(&ref->device, _nvm_device_from_ctrl(ctrl));
-//        if (err != 0)
-//        {
-//            dprintf("Failed to increase device reference: %s\n", strerror(err));
-//            goto destroy_mtx;
-//        }
-//    }
-//#endif
-
     *handle = ref;
     return 0;
-
-
-destroy_mtx:
-    pthread_mutex_destroy(&ref->lock);
-
-free_handle:
-    free(ref);
-
-    return err;
 }
 
 
@@ -142,15 +243,8 @@ void _nvm_ref_put(nvm_aq_ref ref)
 
         if (ref->release != NULL)
         {
-            ref->release(ref, ref->data);
+            ref->release(ref->data, 0, 0);
         }
-
-//#ifdef _SISCI
-//        if (ref->device != NULL)
-//        {
-//            _nvm_device_put(ref->device);
-//        }
-//#endif
 
         pthread_mutex_unlock(&ref->lock);
 
@@ -163,8 +257,9 @@ void _nvm_ref_put(nvm_aq_ref ref)
 
 /* 
  * Execute an NVM admin command.
+ * Lock must be held when calling this function.
  */
-int _nvm_local_admin(struct local_admin* admin, const nvm_cmd_t* cmd, nvm_cpl_t* cpl)
+static int execute_command(struct local_admin* admin, const nvm_cmd_t* cmd, nvm_cpl_t* cpl)
 {
     nvm_cmd_t* in_queue_cmd;
     nvm_cpl_t* in_queue_cpl;
@@ -241,6 +336,9 @@ static void remove_admin(const struct nvm_admin_reference* ref, struct local_adm
 
 
 
+/*
+ * Execute admin command using the RPC binding reference.
+ */
 int nvm_raw_rpc(nvm_aq_ref ref, nvm_cmd_t* cmd, nvm_cpl_t* cpl)
 {
     int err;
@@ -249,7 +347,14 @@ int nvm_raw_rpc(nvm_aq_ref ref, nvm_cmd_t* cmd, nvm_cpl_t* cpl)
     if (err != 0)
     {
         dprintf("Failed to take reference lock\n");
-        return NVM_ERR_PACK(NULL, EBADF);
+        return NVM_ERR_PACK(NULL, err);
+    }
+
+    if (ref->stub == NULL)
+    {
+        pthread_mutex_unlock(&ref->lock);
+        dprintf("Reference is not bound!\n");
+        return NVM_ERR_PACK(NULL, EINVAL);
     }
 
     err = ref->stub(ref->data, cmd, cpl);
@@ -261,30 +366,34 @@ int nvm_raw_rpc(nvm_aq_ref ref, nvm_cmd_t* cmd, nvm_cpl_t* cpl)
 
 
 
-//int _nvm_rpc_bind(nvm_aq_ref ref, void* data, rpc_deleter_t release, rpc_stub_t stub)
-//{
-//    int err;
-//
-//    err = pthread_mutex_lock(&ref->lock);
-//    if (err != 0)
-//    {
-//        dprintf("Failed to take reference lock\n");
-//        return EBADF;
-//    }
-//
-//    if (ref->data != NULL || ref->stub != NULL)
-//    {
-//        pthread_mutex_unlock(&ref->lock);
-//        return EINVAL;
-//    }
-//
-//    ref->data = data;
-//    ref->release = release;
-//    ref->stub = stub;
-//
-//    pthread_mutex_unlock(&ref->lock);
-//    return 0;
-//}
+/*
+ * Bind reference to remote handle.
+ */
+int _nvm_rpc_bind(nvm_aq_ref ref, void* data, rpc_deleter_t release, rpc_stub_t stub)
+{
+    int err;
+
+    err = pthread_mutex_lock(&ref->lock);
+    if (err != 0)
+    {
+        dprintf("Failed to take reference lock\n");
+        return err;
+    }
+
+    if (ref->data != NULL || ref->stub != NULL)
+    {
+        pthread_mutex_unlock(&ref->lock);
+        dprintf("Reference is already bound!\n");
+        return EINVAL;
+    }
+
+    ref->data = data;
+    ref->release = release;
+    ref->stub = stub;
+
+    pthread_mutex_unlock(&ref->lock);
+    return 0;
+}
 
 
 
@@ -329,7 +438,7 @@ int nvm_aq_create(nvm_aq_ref* handle, const nvm_ctrl_t* ctrl, const nvm_dma_t* w
         return ENOMEM;
     }
 
-    ref->stub = (rpc_stub_t) _nvm_local_admin;
+    ref->stub = (rpc_stub_t) execute_command;
     ref->release = (rpc_deleter_t) remove_admin;
 
     // Reset controller
@@ -347,4 +456,34 @@ void nvm_aq_destroy(nvm_aq_ref ref)
     _nvm_ref_put(ref);
 }
 
+
+
+const nvm_ctrl_t* _nvm_ctrl_from_aq_ref(const struct nvm_admin_reference* ref)
+{
+    return ref->ctrl;
+}
+
+
+
+int _nvm_local_admin(nvm_aq_ref ref, const nvm_cmd_t* cmd, nvm_cpl_t* cpl)
+{
+    int err = pthread_mutex_lock(&ref->lock);
+    if (err != 0)
+    {
+        dprintf("Failed to take reference lock: %s\n", strerror(err));
+        return NVM_ERR_PACK(NULL, err);
+    }
+
+    if (ref->stub != (rpc_stub_t) execute_command) 
+    {
+        pthread_mutex_unlock(&ref->lock);
+        dprintf("Reference is not local descriptor\n");
+        return NVM_ERR_PACK(NULL, EINVAL);
+    }
+
+    err = execute_command((struct local_admin*) ref->data, cmd, cpl);
+
+    pthread_mutex_unlock(&ref->lock);
+    return NVM_ERR_PACK(NULL, err);
+}
 

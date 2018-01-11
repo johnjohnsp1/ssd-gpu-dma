@@ -78,9 +78,9 @@ int nvm_rpc_ctrl_info(nvm_aq_ref ref, struct nvm_ctrl_info* info, void* ptr, uin
     }
 
     memset(info, 0, sizeof(struct nvm_ctrl_info));
-    const nvm_ctrl_t* ctrl = ref->ctrl;
+    const nvm_ctrl_t* ctrl = _nvm_ctrl_from_aq_ref(ref);
 
-    info->nvme_version = (uint32_t) *VER(ref->ctrl->mm_ptr);
+    info->nvme_version = (uint32_t) *VER(ctrl->mm_ptr);
     info->page_size = ctrl->page_size;
     info->db_stride = 1UL << ctrl->dstrd;
     info->timeout = ctrl->timeout;

@@ -16,16 +16,9 @@ extern "C" {
 
 /*
  * Bind admin queue-pair reference to remote handle.
+ * The user should call the nvm_aq_destroy() to remove binding.
  */
-int nvm_dis_rpc_bind(nvm_aq_ref* ref, const nvm_ctrl_t* ctrl);
-
-
-
-/*
- * Unbind admin queue-pair reference from remote handle.
- * After t
- */
-void nvm_dis_rpc_unbind(nvm_aq_ref ref);
+int nvm_dis_rpc_bind(nvm_aq_ref* ref, const nvm_ctrl_t* ctrl, uint32_t adapter);
 
 #endif
 

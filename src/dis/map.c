@@ -52,7 +52,7 @@ int _nvm_va_map_remote(struct va_map* m, size_t size, sci_remote_segment_t segme
     uint32_t flags = 0;
 
     flags |= !write ? SCI_FLAG_READONLY_MAP : 0;
-    flags |= !!wc ? SCI_FLAG_IO_MAP_IOSPACE : 0;
+    flags |= !wc ? SCI_FLAG_IO_MAP_IOSPACE : 0;
 
     m->type = _VA_MAP_NOT_MAPPED;
 

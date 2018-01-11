@@ -1,6 +1,7 @@
 #include <nvm_types.h>
 #include <nvm_ctrl.h>
 #include <nvm_rpc.h>
+#include <nvm_aq.h>
 #include <nvm_dma.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -97,19 +98,27 @@ int main(int argc, char** argv)
         exit(2);
     }
 
-//    // Get RPC reference
-//    status = nvm_dis_rpc_bind(&rpc, args.mngr_node_id, args.mngr_intr_no, args.mngr_adapter);
-//    if (status != 0)
-//    {
-//        nvm_ctrl_free(ctrl);
-//        fprintf(stderr, "Failed to get RPC reference: %s\n", strerror(status));
-//        exit(2);
-//    }
-//
+    // Get RPC reference
+    status = nvm_dis_rpc_bind(&rpc, ctrl, args.mngr_adapter);
+    if (status != 0)
+    {
+        nvm_ctrl_free(ctrl);
+        fprintf(stderr, "Failed to get RPC reference: %s\n", strerror(status));
+        exit(2);
+    }
+
 //    status = show_info(rpc, ctrl, args.ctrl_adapter);
 //
 //    // Free resources and quit
-//    nvm_rpc_unbind(rpc);
+
+
+    nvm_cmd_t cmd;
+    nvm_cpl_t cpl;
+
+    status = nvm_raw_rpc(rpc, &cmd, &cpl);
+    fprintf(stderr, "status=%d\n", status);
+
+    nvm_aq_destroy(rpc);
     nvm_ctrl_free(ctrl);
     SCITerminate();
     exit(status);
