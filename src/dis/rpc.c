@@ -17,7 +17,8 @@
 #include <stddef.h>
 #include <errno.h>
 #include <string.h>
-#include "device.h"
+#include "dis/device.h"
+#include "dis/interrupt.h"
 #include "rpc.h"
 #include "regs.h"
 #include "ctrl.h"
@@ -29,6 +30,7 @@
 
 #define RPC_COMMAND_TIMEOUT     2500
 #define RPC_MAGIC_SIGNATURE     0xDEADBEEF
+
 
 
 /*
@@ -72,11 +74,9 @@ struct __attribute__((packed)) handle_info
 struct binding_handle
 {
     struct device_memory        dmem;       // Device memory reference
-    uint32_t                    intr_no;    // Interrupt number
     nvm_aq_ref                  rpc_ref;    // RPC reference
     nvm_dis_rpc_cb_t            rpc_cb;     // RPC callback
-    sci_desc_t                  sd;         // SISCI virtual descriptor
-    sci_local_data_interrupt_t  intr;       // SISCI interrupt handle
+    struct interrupt            intr;       // Interrupt handle
 };
 
 
@@ -87,9 +87,8 @@ struct binding_handle
 struct binding
 {
     struct device_memory        dmem;       // Device memory reference
-    uint32_t                    node_id;    // Node identifier
-    sci_desc_t                  sd;         // SISCI virtual descriptor
-    sci_remote_data_interrupt_t intr;       // SISCI interrupt handle
+    struct interrupt            lintr;      // Local interrupt handle
+    sci_remote_data_interrupt_t rintr;      // Remote interrupt handle
 };
 
 
@@ -101,7 +100,7 @@ static int send_data(struct binding* ref, void* data, size_t length)
 {
     sci_error_t err;
 
-    SCITriggerDataInterrupt(ref->intr, data, length, 0, &err);
+    SCITriggerDataInterrupt(ref->rintr, data, length, 0, &err);
     if (err != SCI_ERR_OK)
     {
         dprintf("Failed to trigger data interrupt\n");
@@ -116,14 +115,8 @@ static int send_data(struct binding* ref, void* data, size_t length)
 /*
  * Handle remote command request.
  */
-static sci_callback_action_t handle_procedure(struct binding_handle* handle, 
-                                              sci_local_data_interrupt_t intr, 
-                                              struct rpc_cmd* request, 
-                                              uint32_t length,
-                                              sci_error_t status)
+static void handle_remote_command(struct binding_handle* handle, void* data, uint32_t length)
 {
-    dprintf("Remote invoked\n");
-    return SCI_CALLBACK_CONTINUE;
 }
 
 
@@ -131,9 +124,46 @@ static sci_callback_action_t handle_procedure(struct binding_handle* handle,
 /*
  * Initiate remote command request.
  */
-static int invoke_procedure(struct binding* binding, nvm_cmd_t* cmd, nvm_cpl_t* cpl)
+static int remote_command(struct binding* binding, nvm_cmd_t* cmd, nvm_cpl_t* cpl)
 {
-    dprintf("Invoke remote\n");
+    struct rpc_cmd request;
+    struct rpc_cpl reply;
+
+    if (cmd == NULL || cpl == NULL)
+    {
+        return NVM_ERR_PACK(NULL, EINVAL);
+    }
+
+    request.node_id = binding->lintr.node_id;
+    request.intr_no = binding->lintr.intr_no;
+    memcpy(&request.cmd, cmd, sizeof(nvm_cmd_t));
+
+    // Trigger remote interrupt
+    int status = send_data(binding, &request, sizeof(request));
+    if (status != 0)
+    {
+        return NVM_ERR_PACK(NULL, status);
+    }
+
+    // XXX: Can a race condition occur here? 
+    // XXX: Maybe create interrupt with callback instead and wait for cond var here?
+    
+    // Wait for callback interrupt
+    status = _nvm_interrupt_wait(&binding->lintr, &reply, sizeof(reply), RPC_COMMAND_TIMEOUT);
+    if (status != 0)
+    {
+        return NVM_ERR_PACK(NULL, status);
+    }
+
+    memcpy(cmd, &reply.cmd, sizeof(nvm_cmd_t));
+    memcpy(cpl, &reply.cpl, sizeof(nvm_cpl_t));
+
+    // Check if command was rejected?
+    if (cmd->dword[0] == 0)
+    {
+        return NVM_ERR_PACK(NULL, EPERM);
+    }
+    
     return NVM_ERR_PACK(NULL, 0);
 }
 
@@ -173,39 +203,21 @@ static int create_binding_handle(struct binding_handle** handle, nvm_aq_ref ref,
         return status;
     }
 
-    sci_error_t err;
-    uint32_t node_id = 0;
-    SCIGetLocalNodeId(adapter, &node_id, 0, &err);
-
-    SCIOpen(&bh->sd, 0, &err);
-    if (err != SCI_ERR_OK)
-    {
-        _nvm_device_memory_put(&bh->dmem);
-        free(bh);
-        dprintf("Failed to open SISCI descriptor: %s\n", SCIGetErrorString(err));
-        return EIO;
-    }
-
     bh->rpc_ref = ref;
     bh->rpc_cb = cb;
 
-    uint32_t flags = SCI_FLAG_USE_CALLBACK;
-    sci_cb_data_interrupt_t cb_intr = (sci_cb_data_interrupt_t) handle_procedure;
-
-    SCICreateDataInterrupt(bh->sd, &bh->intr, adapter, &bh->intr_no, cb_intr, bh, flags, &err);
-    if (err != SCI_ERR_OK)
+    status = _nvm_interrupt_get(&bh->intr, adapter, bh, (interrupt_cb_t) handle_remote_command);
+    if (status != 0)
     {
         _nvm_device_memory_put(&bh->dmem);
-        dprintf("Failed to create binding handle interrupt: %s\n", SCIGetErrorString(err));
-        SCIClose(bh->sd, 0, &err);
         free(bh);
-        return EIO;
+        return status;
     }
 
     struct handle_info* info = ((struct handle_info*) bh->dmem.va_mapping.vaddr);
     info[adapter].magic = 0xDEADBEEF;
-    info[adapter].node_id = node_id;
-    info[adapter].intr_no = bh->intr_no;
+    info[adapter].node_id = bh->intr.node_id;
+    info[adapter].intr_no = bh->intr.intr_no;
 
     *handle = bh;
     return 0;
@@ -218,15 +230,12 @@ static int create_binding_handle(struct binding_handle** handle, nvm_aq_ref ref,
  */
 static void remove_binding_handle(struct binding_handle* handle, uint32_t adapter)
 {
-    sci_error_t err;
-    
     struct handle_info* info = ((struct handle_info*) handle->dmem.va_mapping.vaddr);
     info[adapter].magic = 0;
     info[adapter].node_id = 0;
     info[adapter].intr_no = 0;
 
-    SCIRemoveDataInterrupt(handle->intr, 0, &err);
-    SCIClose(handle->sd, 0, &err);
+    _nvm_interrupt_put(&handle->intr);
     _nvm_device_memory_put(&handle->dmem);
     free(handle);
 }
@@ -255,7 +264,7 @@ static int try_bind(struct binding* binding, size_t max)
 
         // Attempt to connect
         uint32_t adapter = binding->dmem.adapter;
-        SCIConnectDataInterrupt(binding->sd, &binding->intr, node_id, adapter, intr_no, SCI_INFINITE_TIMEOUT, 0, &err);
+        SCIConnectDataInterrupt(binding->lintr.sd, &binding->rintr, node_id, adapter, intr_no, SCI_INFINITE_TIMEOUT, 0, &err);
         if (err == SCI_ERR_OK)
         {
             return 0;
@@ -273,7 +282,7 @@ static int try_bind(struct binding* binding, size_t max)
  */
 static int create_binding(struct binding** handle, const struct device* dev, uint32_t adapter)
 {
-    sci_error_t err;
+    int status;
     *handle = NULL;
 
     struct binding* binding = (struct binding*) malloc(sizeof(struct binding));
@@ -283,7 +292,7 @@ static int create_binding(struct binding** handle, const struct device* dev, uin
         return ENOMEM;
     }
 
-    int status = _nvm_device_memory_get(&binding->dmem, dev, adapter, 0, 
+    status = _nvm_device_memory_get(&binding->dmem, dev, adapter, 0, 
             sizeof(struct handle_info) * NVM_DIS_RPC_MAX_ADAPTER, false, SCI_FLAG_SHARED);
     if (status != 0)
     {
@@ -292,19 +301,18 @@ static int create_binding(struct binding** handle, const struct device* dev, uin
         return status;
     }
 
-    SCIOpen(&binding->sd, 0, &err);
-    if (err != SCI_ERR_OK)
+    status = _nvm_interrupt_get(&binding->lintr, adapter, NULL, NULL);
+    if (status != 0)
     {
         _nvm_device_memory_put(&binding->dmem);
         free(binding);
-        dprintf("Failed to open SISCI descriptor: %s\n", SCIGetErrorString(err));
-        return EIO;
+        return status;
     }
 
     status = try_bind(binding, NVM_DIS_RPC_MAX_ADAPTER);
     if (status != 0)
     {
-        SCIClose(binding->sd, 0, &err);
+        _nvm_interrupt_put(&binding->lintr);
         _nvm_device_memory_put(&binding->dmem);
         free(binding);
         return status;
@@ -326,11 +334,12 @@ static void remove_binding(struct binding* binding)
 
     do
     {
-        SCIDisconnectDataInterrupt(binding->intr, 0, &err);
+        SCIDisconnectDataInterrupt(binding->rintr, 0, &err);
     }
     while (err == SCI_ERR_BUSY);
 
-    SCIClose(binding->sd, 0, &err);
+    _nvm_interrupt_put(&binding->lintr);
+    _nvm_device_memory_put(&binding->dmem);
 
     free(binding);
 }
@@ -397,7 +406,7 @@ int nvm_dis_rpc_bind(nvm_aq_ref* handle, const nvm_ctrl_t* ctrl, uint32_t adapte
         return err;
     }
 
-    err = _nvm_rpc_bind(ref, binding, (rpc_deleter_t) remove_binding, (rpc_stub_t) invoke_procedure);
+    err = _nvm_rpc_bind(ref, binding, (rpc_deleter_t) remove_binding, (rpc_stub_t) remote_command);
     if (err != 0)
     {
         remove_binding(binding);
