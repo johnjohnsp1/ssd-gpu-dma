@@ -36,14 +36,17 @@ static sci_callback_action_t interrupt_callback(struct interrupt* intr_data,
         return SCI_CALLBACK_CANCEL;
     }
 
-    intr_data->callback(intr_data->data, data, length);
+    if (length == intr_data->expected)
+    {
+        intr_data->callback(intr_data->data, data);
+    }
 
     return SCI_CALLBACK_CONTINUE;
 }
 
 
 
-int _nvm_interrupt_get(struct interrupt* intr, uint32_t adapter, void* cb_data, interrupt_cb_t cb)
+int _nvm_interrupt_get(struct interrupt* intr, uint32_t adapter, uint32_t expected, void* cb_data, interrupt_cb_t cb)
 {
     sci_error_t err = SCI_ERR_OK;
 
@@ -69,6 +72,7 @@ int _nvm_interrupt_get(struct interrupt* intr, uint32_t adapter, void* cb_data, 
 
     intr->data = cb_data;
     intr->callback = cb;
+    intr->expected = expected;
     
     uint32_t flags = 0;
     void* data = NULL;
@@ -111,17 +115,17 @@ void _nvm_interrupt_put(struct interrupt* intr)
 
 
 
-int _nvm_interrupt_wait(struct interrupt* intr, void* data, uint32_t expected, uint32_t timeout)
+int _nvm_interrupt_wait(struct interrupt* intr, void* data, uint32_t timeout)
 {
     sci_error_t err = SCI_ERR_OK;
-    uint32_t len = expected;
+    uint32_t len = intr->expected;
     
     SCIWaitForDataInterrupt(intr->intr, data, &len, timeout, 0, &err);
 
     switch (err)
     {
         case SCI_ERR_OK:
-            if (len != expected)
+            if (len != intr->expected)
             {
                 return EBADE;
             }

@@ -23,7 +23,7 @@ struct remote_intr;
 /*
  * Interrupt callback.
  */
-typedef void (*interrupt_cb_t)(void* user_data, const void* recv_data, uint16_t recv_len);
+typedef void (*interrupt_cb_t)(void* user_data, const void* recv_data);
 
 
 
@@ -38,6 +38,7 @@ struct interrupt
     uint32_t                    intr_no;    // Interrupt number
     uint32_t                    node_id;    // DIS node identifier
     void*                       data;       // User data
+    uint32_t                    expected;   // Expected length of received data
     interrupt_cb_t              callback;   // Interrupt callback
 };
 
@@ -48,6 +49,7 @@ struct interrupt
  */
 int _nvm_interrupt_get(struct interrupt* intr, 
                        uint32_t adapter, 
+                       uint32_t expected,
                        void* cb_data, 
                        interrupt_cb_t cb_func);
 
@@ -64,7 +66,7 @@ void _nvm_interrupt_put(struct interrupt* intr);
  * Block for a duration while waiting for an interrupt and removes interrupt afterwards.
  * Returns success if length of received data matches expected length.
  */
-int _nvm_interrupt_wait(struct interrupt* intr, void* data, uint32_t expected, uint32_t timeout);
+int _nvm_interrupt_wait(struct interrupt* intr, void* data, uint32_t timeout);
 
 
 #endif /* _SISCI */

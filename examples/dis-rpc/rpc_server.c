@@ -19,7 +19,7 @@
 #include "dis/node.h"
 #include "util.h"
 
-#define MAX_ADAPTS 4
+#define MAX_ADAPTS NVM_DIS_RPC_MAX_ADAPTER 
 
 
 /* Program options */
@@ -28,7 +28,6 @@ struct cl_args
     bool        identify_ctrl;      // Indicates if the manager should run an NVM identify controller command
     uint64_t    smartio_dev_id;     // Specify SmartIO device
     uint32_t    ctrl_adapter;       // Controller adapter
-    uint32_t    intr_no;            // Specify local data interrupt number
     size_t      n_dis_adapters;     // Number of adapters specified
     uint32_t    dis_adapters[MAX_ADAPTS]; // Indicate which local adapters to bind manager to
 };
@@ -98,23 +97,12 @@ static int run_service(const nvm_ctrl_t* ctrl, const nvm_dma_t* q_wnd, const str
 
     for (size_t i_adapter = 0; i_adapter < args->n_dis_adapters; ++i_adapter)
     {
-        // Get local node ID
-//        uint32_t node_id = 0;
-//        status = get_local_node_id(args->dis_adapters[i_adapter], &node_id);
-//        if (status != 0)
-//        {
-//            fprintf(stderr, "Unexpected error while getting local node id\n");
-//        }
-
         // Enable RPC on adapter
         status = nvm_dis_rpc_enable(rpc, args->dis_adapters[i_adapter], request_accepter);   
         if (status != 0)
         {
             fprintf(stderr, "Unexpected error: %s\n", strerror(status));
         }
-
-//        fprintf(stderr, "Connect RPC client to controller manager on node %u using interrupt %u\n",
-//                node_id, args->intr_no);
     }
 
     // Set current thread in background
@@ -206,8 +194,6 @@ static void parse_opts(int argc, char** argv, struct cl_args* args)
     static struct option opts[] = {
         { "help", no_argument, NULL, 'h' },
         { "identify", no_argument, NULL, 1 },
-        { "interrupt", required_argument, NULL, 'i' },
-        { "intr", required_argument, NULL, 'i' },
         { "enable", required_argument, NULL, 'r' },
         { "ctrl", required_argument, NULL, 'c' },
         { "adapter", required_argument, NULL, 'a' },
@@ -220,11 +206,8 @@ static void parse_opts(int argc, char** argv, struct cl_args* args)
 
     memset(args, 0, sizeof(struct cl_args));
 
-    // Assign interrupts a random number
-    args->intr_no = random_id();
-
     // Parse arguments
-    while ((opt = getopt_long(argc, argv, ":hvc:i:a:", opts, &idx)) != -1)
+    while ((opt = getopt_long(argc, argv, ":hvc:a:", opts, &idx)) != -1)
     {
         switch (opt)
         {
@@ -265,15 +248,6 @@ static void parse_opts(int argc, char** argv, struct cl_args* args)
                     fprintf(stderr, "Invalid adapter number: %s\n", optarg);
                     give_usage(argv[0]);
                     exit('a');
-                }
-                break;
-
-            case 'i': // interrupt number
-                if (parse_u32(optarg, &args->intr_no, 10) != 0)
-                {
-                    fprintf(stderr, "Invalid interrupt number: %s\n", optarg);
-                    give_usage(argv[0]);
-                    exit('i');
                 }
                 break;
 
@@ -343,7 +317,7 @@ static void identify_controller(const nvm_ctrl_t* ctrl, uint32_t adapter, nvm_aq
 static void give_usage(const char* program_name)
 {
     fprintf(stderr, 
-            "Usage: %s --ctrl <dev id> [--adapter <adapter>] [--intr <intr no>] [--enable <adapter>]...\n", 
+            "Usage: %s --ctrl <dev id> [--adapter <adapter>] [--enable <adapter>]...\n", 
             program_name);
 }
 
@@ -355,7 +329,6 @@ static void show_help(const char* program_name)
             "    Run controller manager RPC server in a DIS cluster.\n\n"
             "    --ctrl             <dev id>    SmartIO device identifier.\n"
             "    --adapter          <adapter>   Local adapter to reach device (default is 0).\n"
-            "    --intr             <intr no>   RPC interrupt number (defaults to a random number).\n"
             "    --enable           <adapter>   Enable RPC on adapter (defaults to controller adapter).\n"
             "    --identify                     Print controller information.\n"
             "    --verbose                      Print more information.\n"

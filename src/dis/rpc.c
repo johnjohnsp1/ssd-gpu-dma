@@ -96,11 +96,11 @@ struct binding
 /*
  * Trigger remote interrupt with data.
  */
-static int send_data(struct binding* ref, void* data, size_t length)
+static int send_data(sci_remote_data_interrupt_t intr, void* data, size_t length)
 {
     sci_error_t err;
 
-    SCITriggerDataInterrupt(ref->rintr, data, length, 0, &err);
+    SCITriggerDataInterrupt(intr, data, length, 0, &err);
     if (err != SCI_ERR_OK)
     {
         dprintf("Failed to trigger data interrupt\n");
@@ -115,8 +115,37 @@ static int send_data(struct binding* ref, void* data, size_t length)
 /*
  * Handle remote command request.
  */
-static void handle_remote_command(struct binding_handle* handle, void* data, uint32_t length)
+static void handle_remote_command(struct binding_handle* handle, const struct rpc_cmd* request)
 {
+    sci_error_t err;
+    sci_remote_data_interrupt_t intr;
+    struct rpc_cpl reply;
+
+    uint32_t adapter = handle->dmem.adapter;
+    uint32_t node_id = request->node_id;
+    uint32_t intr_no = request->intr_no;
+    
+    memcpy(&reply.cmd, request->cmd, sizeof(nvm_cmd_t));
+
+    SCIConnectDataInterrupt(handle->intr.sd, &intr, node_id, adapter, intr_no, SCI_INFINITE_TIMEOUT, 0, &err);
+    if (err != SCI_ERR_OK)
+    {
+        dprintf("Failed to connect back\n");
+        return;
+    }
+
+    if ( handle->rpc_cb == NULL || handle->rpc_cb((nvm_cmd_t*) &reply.cmd, adapter, node_id) )
+    {
+        _nvm_local_admin(handle->rpc_ref, (const nvm_cmd_t*) &reply.cmd, (nvm_cpl_t*) &reply.cpl);
+    }
+    else
+    {
+        memset(&reply, 0, sizeof(reply));
+    }
+
+    send_data(intr, &reply, sizeof(reply));
+
+    SCIDisconnectDataInterrupt(intr, 0, &err);
 }
 
 
@@ -139,7 +168,7 @@ static int remote_command(struct binding* binding, nvm_cmd_t* cmd, nvm_cpl_t* cp
     memcpy(&request.cmd, cmd, sizeof(nvm_cmd_t));
 
     // Trigger remote interrupt
-    int status = send_data(binding, &request, sizeof(request));
+    int status = send_data(binding->rintr, &request, sizeof(request));
     if (status != 0)
     {
         return NVM_ERR_PACK(NULL, status);
@@ -149,7 +178,7 @@ static int remote_command(struct binding* binding, nvm_cmd_t* cmd, nvm_cpl_t* cp
     // XXX: Maybe create interrupt with callback instead and wait for cond var here?
     
     // Wait for callback interrupt
-    status = _nvm_interrupt_wait(&binding->lintr, &reply, sizeof(reply), RPC_COMMAND_TIMEOUT);
+    status = _nvm_interrupt_wait(&binding->lintr, &reply, RPC_COMMAND_TIMEOUT);
     if (status != 0)
     {
         return NVM_ERR_PACK(NULL, status);
@@ -206,7 +235,8 @@ static int create_binding_handle(struct binding_handle** handle, nvm_aq_ref ref,
     bh->rpc_ref = ref;
     bh->rpc_cb = cb;
 
-    status = _nvm_interrupt_get(&bh->intr, adapter, bh, (interrupt_cb_t) handle_remote_command);
+    status = _nvm_interrupt_get(&bh->intr, adapter, sizeof(struct rpc_cmd), 
+            bh, (interrupt_cb_t) handle_remote_command);
     if (status != 0)
     {
         _nvm_device_memory_put(&bh->dmem);
@@ -301,7 +331,7 @@ static int create_binding(struct binding** handle, const struct device* dev, uin
         return status;
     }
 
-    status = _nvm_interrupt_get(&binding->lintr, adapter, NULL, NULL);
+    status = _nvm_interrupt_get(&binding->lintr, adapter, sizeof(struct rpc_cpl), NULL, NULL);
     if (status != 0)
     {
         _nvm_device_memory_put(&binding->dmem);

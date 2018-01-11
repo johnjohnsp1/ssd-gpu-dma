@@ -19,17 +19,14 @@
 struct cl_args
 {
     uint64_t    smartio_dev_id;     // Specify SmartIO device
-    uint32_t    ctrl_adapter;       // Controller adapter
-    uint32_t    mngr_node_id;       // Manager node identifier
-    uint32_t    mngr_adapter;       // Manager adapter
-    uint32_t    mngr_intr_no;       // Manager interrupt number
+    uint32_t    adapter;            // Controller adapter
 };
 
 
 static void give_usage(const char* program_name)
 {
     fprintf(stderr, 
-            "Usage: %s --ctrl <dev id> [--adapter <adapter>] --manager <node id> [--manager-adapter adapter] --intr <intr no>\n",
+            "Usage: %s --ctrl <dev id> [--adapter <adapter>]\n",
             program_name);
 }
 
@@ -37,41 +34,41 @@ static void give_usage(const char* program_name)
 static void parse_opts(int argc, char** argv, struct cl_args* args);
 
 
-//static int show_info(nvm_rpc_t rpc, nvm_ctrl_t ctrl, uint32_t adapter)
-//{
-//    struct segment memory_page;
-//    nvm_dma_t dma;
-//
-//    int status = segment_create(&memory_page, random_id(), 0x1000);
-//    if (status != 0)
-//    {
-//        fprintf(stderr, "Failed to create memory segment\n");
-//        return 1;
-//    }
-//
-//    status = dma_create(&dma, ctrl, &memory_page, adapter);
-//    if (status != 0)
-//    {
-//        segment_remove(&memory_page);
-//        fprintf(stderr, "Failed to create DMA window\n");
-//        return 2;
-//    }
-//
-//    nvm_ctrl_info_t info;
-//    status = nvm_rpc_ctrl_info(&info, rpc, ctrl, dma->vaddr, dma->ioaddrs[0]);
-//    if (status == 0)
-//    {
-//        print_ctrl_info(stdout, &info);
-//    }
-//    else
-//    {
-//        fprintf(stderr, "RPC command request failed: %s\n", strerror(status));
-//    }
-//
-//    dma_remove(&dma, &memory_page, adapter);
-//    segment_remove(&memory_page);
-//    return status;
-//}
+static int show_info(nvm_aq_ref rpc, const nvm_ctrl_t* ctrl, uint32_t adapter)
+{
+    struct segment memory_page;
+    nvm_dma_t* dma;
+
+    int status = segment_create(&memory_page, random_id(), 0x1000);
+    if (status != 0)
+    {
+        fprintf(stderr, "Failed to create memory segment\n");
+        return 1;
+    }
+
+    status = dma_create(&dma, ctrl, &memory_page, adapter);
+    if (status != 0)
+    {
+        segment_remove(&memory_page);
+        fprintf(stderr, "Failed to create DMA window\n");
+        return 2;
+    }
+
+    struct nvm_ctrl_info info;
+    status = nvm_rpc_ctrl_info(rpc, &info, dma->vaddr, dma->ioaddrs[0]);
+    if (status == 0)
+    {
+        print_ctrl_info(stdout, &info);
+    }
+    else
+    {
+        fprintf(stderr, "RPC command request failed: %s\n", strerror(status));
+    }
+
+    dma_remove(dma, &memory_page, adapter);
+    segment_remove(&memory_page);
+    return status;
+}
 
 
 int main(int argc, char** argv)
@@ -91,7 +88,7 @@ int main(int argc, char** argv)
     }
 
     // Get controller reference
-    int status = nvm_dis_ctrl_init(&ctrl, args.smartio_dev_id, args.ctrl_adapter);
+    int status = nvm_dis_ctrl_init(&ctrl, args.smartio_dev_id, args.adapter);
     if (status != 0)
     {
         fprintf(stderr, "Failed to get controller reference: %s\n", strerror(status));
@@ -99,7 +96,7 @@ int main(int argc, char** argv)
     }
 
     // Get RPC reference
-    status = nvm_dis_rpc_bind(&rpc, ctrl, args.mngr_adapter);
+    status = nvm_dis_rpc_bind(&rpc, ctrl, args.adapter);
     if (status != 0)
     {
         nvm_ctrl_free(ctrl);
@@ -107,17 +104,9 @@ int main(int argc, char** argv)
         exit(2);
     }
 
-//    status = show_info(rpc, ctrl, args.ctrl_adapter);
-//
-//    // Free resources and quit
+    status = show_info(rpc, ctrl, args.adapter);
 
-
-    nvm_cmd_t cmd;
-    nvm_cpl_t cpl;
-
-    status = nvm_raw_rpc(rpc, &cmd, &cpl);
-    fprintf(stderr, "status=%d\n", status);
-
+    // Free resources and quit
     nvm_aq_destroy(rpc);
     nvm_ctrl_free(ctrl);
     SCITerminate();
@@ -129,12 +118,9 @@ static void show_help(const char* program_name)
 {
     give_usage(program_name);
     fprintf(stderr, 
-            "    Run controller manager RPC client in a DIS cluster.\n\n"
+            "    Run RPC client in a DIS cluster.\n\n"
             "    --ctrl             <dev id>    SmartIO device identifier.\n"
-            "    --ctrl-adapter     <adapter>   Local adapter to reach device (default is 0).\n"
-            "    --manager          <node id>   Remote node manager is running on.\n"
-            "    --manager-adapter  <adapter>   Local adapter to reach manager node (default is 0).\n"
-            "    --intr             <intr no>   RPC interrupt number.\n"
+            "    --adapter          <adapter>   Local adapter to reach device (default is 0).\n"
             "    --help                         Show this information.\n"
             "\n");
 }
@@ -145,14 +131,7 @@ static void parse_opts(int argc, char** argv, struct cl_args* args)
     static struct option opts[] = {
         { "help", no_argument, NULL, 'h' },
         { "ctrl", required_argument, NULL, 'c' },
-        { "ctrl-adapter", required_argument, NULL, 'a' },
         { "adapter", required_argument, NULL, 'a' },
-        { "manager", required_argument, NULL, 'm' },
-        { "mngr", required_argument, NULL, 'm' },
-        { "manager-adapter", required_argument, NULL, 'r' },
-        { "mngr-adapter", required_argument, NULL, 'r' },
-        { "interrupt", required_argument, NULL, 'i' },
-        { "intr", required_argument, NULL, 'i' },
         { NULL, 0, NULL, 0 }
     };
 
@@ -160,11 +139,9 @@ static void parse_opts(int argc, char** argv, struct cl_args* args)
     int idx;
 
     memset(args, 0, sizeof(struct cl_args));
-    bool intr_set = false;
-    bool node_set = false;
 
     // Parse arguments
-    while ((opt = getopt_long(argc, argv, ":hc:a:m:r:i:", opts, &idx)) != -1)
+    while ((opt = getopt_long(argc, argv, ":hc:a:", opts, &idx)) != -1)
     {
         switch (opt)
         {
@@ -192,40 +169,11 @@ static void parse_opts(int argc, char** argv, struct cl_args* args)
                 break;
 
             case 'a': // device adapter
-                if (parse_u32(optarg, &args->ctrl_adapter, 10) != 0)
+                if (parse_u32(optarg, &args->adapter, 10) != 0)
                 {
                     fprintf(stderr, "Invalid adapter number: %s\n", optarg);
                     give_usage(argv[0]);
                     exit('a');
-                }
-                break;
-
-            case 'm': // remote manager
-                if (get_node_info(optarg, &args->mngr_node_id, &args->mngr_adapter) != 0)
-                {
-                    fprintf(stderr, "Invalid node identifier: %s\n", optarg);
-                    give_usage(argv[0]);
-                    exit('m');
-                }
-                node_set = true;
-                break;
-
-            case 'i': // interrupt number
-                if (parse_u32(optarg, &args->mngr_intr_no, 10) != 0)
-                {
-                    fprintf(stderr, "Invalid interrupt number: %s\n", optarg);
-                    give_usage(argv[0]);
-                    exit('i');
-                }
-                intr_set = true;
-                break;
-
-            case 'r': // manager adapter
-                if (parse_u32(optarg, &args->mngr_adapter, 0) != 0)
-                {
-                    fprintf(stderr, "Invalid adapter number: %s\n", optarg);
-                    give_usage(argv[0]);
-                    exit('r');
                 }
                 break;
         }
@@ -236,20 +184,6 @@ static void parse_opts(int argc, char** argv, struct cl_args* args)
         fprintf(stderr, "No controller specified!\n");
         give_usage(argv[0]);
         exit('c');
-    }
-
-    if (!intr_set)
-    {
-        fprintf(stderr, "RPC interrupt number is not set!\n");
-        give_usage(argv[0]);
-        exit('i');
-    }
-
-    if (!node_set)
-    {
-        fprintf(stderr, "Manager node identifier is not set!\n");
-        give_usage(argv[0]);
-        exit('m');
     }
 }
 
