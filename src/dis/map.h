@@ -83,7 +83,8 @@ struct io_map
 #define IO_MAP_CLEAR(p) \
     do { (p)->type = _IO_MAP_NOT_MAPPED; (p)->ioaddr = 0; } while (0)
 
-#define IO_MAP_INIT     { .type = _IO_MAP_NOT_MAPPED, .lsegment = NULL, .rsegment = 0, .device = NULL, .adapter = 0, .ioaddr = 0 }
+#define IO_MAP_INIT     \
+    { .type = _IO_MAP_NOT_MAPPED, .lsegment = NULL, .rsegment = 0, .device = NULL, .adapter = 0, .ioaddr = 0 }
 
 
 
