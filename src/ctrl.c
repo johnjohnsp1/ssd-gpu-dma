@@ -19,10 +19,16 @@
 #include <sys/mman.h>
 #include <stdio.h>
 #include "dis/device.h"
+#include "dis/map.h"
 #include "ctrl.h"
 #include "util.h"
 #include "regs.h"
 #include "dprintf.h"
+
+
+
+/* Forward declaration */
+struct memory_reference;
 
 
 /*
@@ -43,11 +49,21 @@ enum device_type
  */
 struct controller
 {
-    enum device_type        type;       // Device type
-    int                     fd;         // File descriptor to memory mapping
-    struct device_memory*   bar;        // Reference to mapped BAR0
-    nvm_ctrl_t              handle;     // User handle
+    enum device_type            type;   // Device type
+    struct memory_reference*    ref;    // Reference to mapped BAR0
+    int                         fd;     // File descriptor to memory mapping
+    nvm_ctrl_t                  handle; // User handle
 };
+
+
+#ifdef _SISCI
+struct memory_reference
+{
+    struct device_memory        bar;    // Reference to BAR0
+    struct va_map               map;    // Mapping descriptor
+};
+#endif
+
 
 
 
@@ -92,9 +108,9 @@ const struct device* _nvm_device_from_ctrl(const nvm_ctrl_t* ctrl)
 {
     const struct controller* container = const_container(ctrl);
 
-    if (container->type == _DEVICE_TYPE_SMARTIO && container->bar != NULL)
+    if (container->type == _DEVICE_TYPE_SMARTIO && container->ref != NULL)
     {
-        return &container->bar->device;
+        return &container->ref->bar.device;
     }
 
     return NULL;
@@ -118,7 +134,7 @@ static struct controller* create_container()
 
     container->type = _DEVICE_TYPE_UNKNOWN;
     container->fd = -1;
-    container->bar = NULL;
+    container->ref = NULL;
 
     return container;
 }
@@ -130,18 +146,18 @@ static struct controller* create_container()
  * Helper function to increase a device reference and connect 
  * to a PCI BAR0 on the controller's device.
  */
-static int connect_register_memory(struct device_memory** handle, const struct device* dev, uint32_t adapter)
+static int connect_register_memory(struct memory_reference** ref, const struct device* dev, uint32_t adapter)
 {
-    *handle = NULL;
+    *ref = NULL;
 
-    struct device_memory* mem = (struct device_memory*) malloc(sizeof(struct device_memory));
+    struct memory_reference* mem = (struct memory_reference*) malloc(sizeof(struct memory_reference));
     if (mem == NULL)
     {
         dprintf("Failed to allocate controller memory reference: %s\n", strerror(errno));
         return ENOMEM;
     }
 
-    int err = _nvm_device_memory_get(mem, dev, adapter, 0, NVM_CTRL_MEM_MINSIZE, true, SCI_FLAG_BAR);
+    int err = _nvm_device_memory_get(&mem->bar, dev, adapter, 0, SCI_FLAG_BAR);
     if (err != 0)
     {
         free(mem);
@@ -149,8 +165,28 @@ static int connect_register_memory(struct device_memory** handle, const struct d
         return err;
     }
 
-    *handle = mem;
+    err = _nvm_va_map_remote(&mem->map, NVM_CTRL_MEM_MINSIZE, mem->bar.segment, true, false);
+    if (err != 0)
+    {
+        _nvm_device_memory_put(&mem->bar);
+        free(mem);
+        dprintf("Failed to map controller memory: %s\n", strerror(err));
+        return err;
+    }
+
+    *ref = mem;
     return 0;
+}
+#endif
+
+
+
+#ifdef _SISCI
+static void disconnect_register_memory(struct memory_reference* ref)
+{
+    _nvm_va_unmap(&ref->map);
+    _nvm_device_memory_put(&ref->bar);
+    free(ref);
 }
 #endif
 
@@ -307,7 +343,7 @@ int nvm_dis_ctrl_init(nvm_ctrl_t** ctrl, uint64_t dev_id, uint32_t adapter)
         return err;
     }
 
-    err = connect_register_memory(&container->bar, &dev, adapter);
+    err = connect_register_memory(&container->ref, &dev, adapter);
     if (err != 0)
     {
         _nvm_device_put(&dev);
@@ -317,12 +353,12 @@ int nvm_dis_ctrl_init(nvm_ctrl_t** ctrl, uint64_t dev_id, uint32_t adapter)
 
     _nvm_device_put(&dev);
 
-    size_t size = SCIGetRemoteSegmentSize(container->bar->segment);
+    size_t size = SCIGetRemoteSegmentSize(container->ref->bar.segment);
 
-    err = initialize_handle(&container->handle, container->bar->va_mapping.vaddr, size);
+    err = initialize_handle(&container->handle, container->ref->map.vaddr, size);
     if (err != 0)
     {
-        _nvm_device_memory_put(container->bar);
+        disconnect_register_memory(container->ref);
         free(container);
         return err;
     }
@@ -334,41 +370,39 @@ int nvm_dis_ctrl_init(nvm_ctrl_t** ctrl, uint64_t dev_id, uint32_t adapter)
 
 
 
-int nvm_ctrl_init(nvm_ctrl_t** ctrl, const char* path)
+//int nvm_ctrl_init(nvm_ctrl_t** ctrl, const char* path)
+int nvm_ctrl_init(nvm_ctrl_t** ctrl, int fd)
 {
     int err;
     
-    int fd = open(path, O_RDWR|O_NONBLOCK);
-    if (fd < 0)
-    {
-        dprintf("Could not find device resource file: %s\n", path);
-        return ENODEV;
-    }
+    // TODO: dup(fd) instead
+//    int fd = open(path, O_RDWR|O_NONBLOCK);
+//    if (fd < 0)
+//    {
+//        dprintf("Could not find device resource file: %s\n", path);
+//        return ENODEV;
+//    }
 
     volatile void* ptr = mmap(NULL, NVM_CTRL_MEM_MINSIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_FILE, fd, 0);
     if (ptr == NULL)
     {
-        close(fd);
         dprintf("Failed to map device memory: %s\n", strerror(errno));
-        return EIO;
+        return errno;
     }
 
     struct controller* container = create_container();
     if (container == NULL)
     {
         munmap((void*) ptr, NVM_CTRL_MEM_MINSIZE);
-        close(fd);
         return ENOMEM;
     }
 
     container->type = _DEVICE_TYPE_SYSFS;
-    container->fd = fd;
 
     err = initialize_handle(&container->handle, ptr, NVM_CTRL_MEM_MINSIZE);
     if (err != 0)
     {
         munmap((void*) ptr, NVM_CTRL_MEM_MINSIZE);
-        close(fd);
         free(container);
         return err;
     }
@@ -393,13 +427,12 @@ void nvm_ctrl_free(nvm_ctrl_t* ctrl)
 
             case _DEVICE_TYPE_SYSFS:
                 munmap((void*) ctrl->mm_ptr, ctrl->mm_size);
-                close(container->fd);
+                //close(container->fd);
                 break;
 
 #if _SISCI
             case _DEVICE_TYPE_SMARTIO:
-                _nvm_device_memory_put(container->bar);
-                free(container->bar);
+                disconnect_register_memory(container->ref);
                 break;
 #endif
 
@@ -411,23 +444,4 @@ void nvm_ctrl_free(nvm_ctrl_t* ctrl)
         free(container);
     }
 }
-
-
-
-//#ifdef _SISCI
-//int nvm_dis_ctrl_device(const nvm_ctrl_t* ctrl, sci_device_t* dev)
-//{
-//    *dev = NULL;
-//
-//    const struct device* device = _nvm_device_from_ctrl(ctrl);
-//
-//    if (device != NULL)
-//    {
-//        *dev = device->device;
-//        return 0;
-//    }
-//
-//    return EBADF;
-//}
-//#endif
 

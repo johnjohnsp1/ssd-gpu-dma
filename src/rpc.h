@@ -10,7 +10,6 @@
 
 /* Forward declaration */
 struct nvm_admin_reference;
-struct local_admin;
 
 
 

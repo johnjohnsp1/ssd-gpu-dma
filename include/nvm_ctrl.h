@@ -27,8 +27,10 @@ extern "C" {
  * Read from controller registers and initialize controller handle. 
  * This function should be used when using the kernel module or to manually
  * read from sysfs.
+ *
+ * Note: fd must be opened with O_RDWR and O_NONBLOCK
  */
-int nvm_ctrl_init(nvm_ctrl_t** ctrl, const char* filename);
+int nvm_ctrl_init(nvm_ctrl_t** ctrl, int fd);
 
 
 

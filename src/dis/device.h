@@ -2,7 +2,6 @@
 #define __NVM_INTERNAL_DIS_DEVICE_H__
 
 /* Forward declarations */
-struct va_map;
 struct device;
 struct device_memory;
 
@@ -50,7 +49,6 @@ struct device_memory
     uint32_t                segment_no;     // Device segment number
     sci_remote_segment_t    segment;        // SISCI remote segment to device memory
     uint32_t                flags;          // SISCI flags used when connecting segment
-    struct va_map           va_mapping;     // Mapping descriptor
 };
 
 
@@ -77,8 +75,6 @@ int _nvm_device_memory_get(struct device_memory* mem,
                            const struct device* dev, 
                            uint32_t adapter,
                            uint32_t segment_no,
-                           size_t size,
-                           bool write,
                            uint32_t flags);
 
 

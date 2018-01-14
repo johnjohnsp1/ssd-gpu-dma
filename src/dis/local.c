@@ -10,7 +10,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <errno.h>
-#include "dis/map.h"
 #include "dis/local.h"
 #include "dprintf.h"
 #include <sisci_types.h>
@@ -30,7 +29,6 @@ static int create_segment(struct local_memory* m, uint32_t id, size_t size, uint
     m->id = id;
     m->size = 0;
     m->flags = flags;
-    VA_MAP_CLEAR(&m->va_mapping);
 
     SCIOpen(&m->sd, 0, &err);
     if (err != SCI_ERR_OK)
@@ -62,16 +60,13 @@ static int create_segment(struct local_memory* m, uint32_t id, size_t size, uint
 
 
 
-/*
- * Helper function to remove a local segment.
- */ 
-static void remove_segment(struct local_memory* m)
+void _nvm_local_memory_put(struct local_memory* mem)
 {
     sci_error_t err = SCI_ERR_OK;
 
     do
     {
-        SCIRemoveSegment(m->segment, 0, &err);
+        SCIRemoveSegment(mem->segment, 0, &err);
     }
     while (err == SCI_ERR_BUSY);
 
@@ -95,13 +90,6 @@ int _nvm_local_memory_get(struct local_memory* mem, uint32_t id, size_t size)
         return err;
     }
 
-    err = _nvm_va_map_local(&mem->va_mapping, mem->size, mem->segment);
-    if (err != 0)
-    {
-        remove_segment(mem);
-        return err;
-    }
-
     return 0;
 }
 
@@ -121,23 +109,11 @@ int _nvm_local_memory_get_attached(struct local_memory* mem, uint32_t id, void* 
     SCIAttachPhysicalMemory(0, ptr, 0, size, mem->segment, SCI_FLAG_CUDA_BUFFER, &err);
     if (err != SCI_ERR_OK)
     {
-        remove_segment(mem);
+        _nvm_local_memory_put(mem);
         dprintf("Failed to attach memory to local segment: %s\n", SCIGetErrorString(err));
         return EIO;
     }
 
     return 0;
-}
-
-
-
-void _nvm_local_memory_put(struct local_memory* mem)
-{
-    if (!(mem->flags & SCI_FLAG_EMPTY))
-    {
-        _nvm_va_unmap(&mem->va_mapping);
-    }
-    
-    remove_segment(mem);
 }
 

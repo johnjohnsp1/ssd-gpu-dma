@@ -2,7 +2,6 @@
 #define __NVM_INTERNAL_DIS_LOCAL_MEMORY_H__
 
 /* Forward declarations */
-struct va_map;
 struct local_memory;
 
 
@@ -17,7 +16,6 @@ struct local_memory;
 #include <stddef.h>
 #include <stdint.h>
 #include <sisci_types.h>
-#include "dis/map.h"
 
 
 
@@ -33,7 +31,6 @@ struct local_memory
     uint32_t                id;             // Local segment identifier
     size_t                  size;           // Size of local memory
     uint32_t                flags;          // SISCI flags used when creating segment
-    struct va_map           va_mapping;     // Virtual address space mapping
 };
 
 

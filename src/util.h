@@ -65,7 +65,7 @@ static inline size_t _nvm_host_page_size()
     long page_size = sysconf(_SC_PAGESIZE);
 
 #ifndef NDEBUG
-    if (page_size == -1)
+    if (page_size < 0)
     {
         dprintf("Failed to look up system page size: %s\n", strerror(errno));
         return 0;

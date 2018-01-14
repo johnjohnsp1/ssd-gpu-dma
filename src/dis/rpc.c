@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <string.h>
 #include "dis/device.h"
+#include "dis/map.h"
 #include "dis/interrupt.h"
 #include "rpc.h"
 #include "regs.h"
@@ -180,6 +181,33 @@ static int remote_command(struct binding* binding, nvm_cmd_t* cmd, nvm_cpl_t* cp
 
 
 
+/* 
+ * Helper function to write info about a handle.
+ */
+static int write_handle_info(const struct binding_handle* handle, uint32_t adapter, bool clear)
+{
+    int status = 0;
+    struct va_map mapping = VA_MAP_INIT;
+
+    status = _nvm_va_map_remote(&mapping, sizeof(struct handle_info) * NVM_DIS_RPC_MAX_ADAPTER,
+            handle->dmem.segment, true, false);
+    if (status != 0)
+    {
+        dprintf("Failed to map shared segment: %s\n", strerror(status));
+        return status;
+    }
+
+    volatile struct handle_info* info = (volatile struct handle_info*) mapping.vaddr;
+    info[adapter].magic = clear ? 0 : 0xDEADBEEF;
+    info[adapter].node_id = clear ? 0 : handle->intr.node_id;
+    info[adapter].intr_no = clear ? 0 : handle->intr.intr_no;
+
+    _nvm_va_unmap(&mapping);
+    return 0;
+}
+
+
+
 /*
  * Helper function to create a a server binding handle.
  */
@@ -206,8 +234,7 @@ static int create_binding_handle(struct binding_handle** handle, nvm_aq_ref ref,
         return ENOMEM;
     }
 
-    int status = _nvm_device_memory_get(&bh->dmem, dev, adapter, 0, 
-            sizeof(struct handle_info) * NVM_DIS_RPC_MAX_ADAPTER, true, SCI_FLAG_SHARED);
+    int status = _nvm_device_memory_get(&bh->dmem, dev, adapter, 0, SCI_FLAG_SHARED);
     if (status != 0)
     {
         free(bh);
@@ -225,10 +252,13 @@ static int create_binding_handle(struct binding_handle** handle, nvm_aq_ref ref,
         return status;
     }
 
-    struct handle_info* info = ((struct handle_info*) bh->dmem.va_mapping.vaddr);
-    info[adapter].magic = 0xDEADBEEF;
-    info[adapter].node_id = bh->intr.node_id;
-    info[adapter].intr_no = bh->intr.intr_no;
+    status = write_handle_info(bh, adapter, false);
+    if (status != 0)
+    {
+        _nvm_device_memory_put(&bh->dmem);
+        free(bh);
+        return status;
+    }
 
     *handle = bh;
     return 0;
@@ -241,10 +271,7 @@ static int create_binding_handle(struct binding_handle** handle, nvm_aq_ref ref,
  */
 static void remove_binding_handle(struct binding_handle* handle, uint32_t adapter)
 {
-    struct handle_info* info = ((struct handle_info*) handle->dmem.va_mapping.vaddr);
-    info[adapter].magic = 0;
-    info[adapter].node_id = 0;
-    info[adapter].intr_no = 0;
+    write_handle_info(handle, adapter, true);
 
     _nvm_local_intr_put(&handle->intr);
     _nvm_device_memory_put(&handle->dmem);
@@ -258,7 +285,18 @@ static void remove_binding_handle(struct binding_handle* handle, uint32_t adapte
  */
 static int try_bind(struct binding* binding, size_t max)
 {
-    const struct handle_info* info = (const struct handle_info*) binding->dmem.va_mapping.vaddr;
+    // Create mapping to remote shared segment
+    struct va_map mapping;
+    int err = _nvm_va_map_remote(&mapping, sizeof(struct handle_info) * NVM_DIS_RPC_MAX_ADAPTER, 
+            binding->dmem.segment, false, false);
+    if (err != 0)
+    {
+        return err;
+    }
+
+    volatile const struct handle_info* info = (volatile const struct handle_info*) mapping.vaddr;
+
+    // Iterate over exported interrupts
     for (size_t i = 0; i < max; ++i)
     {
         // Read information
@@ -275,10 +313,12 @@ static int try_bind(struct binding* binding, size_t max)
         uint32_t adapter = binding->dmem.adapter;
         if (_nvm_remote_intr_get(&binding->rintr, adapter, node_id, intr_no) == 0)
         {
+            _nvm_va_unmap(&mapping);
             return 0;
         }
     }
 
+    _nvm_va_unmap(&mapping);
     dprintf("Failed to connect to remote interrupt\n");
     return ECONNREFUSED;
 }
@@ -300,8 +340,7 @@ static int create_binding(struct binding** handle, const struct device* dev, uin
         return ENOMEM;
     }
 
-    status = _nvm_device_memory_get(&binding->dmem, dev, adapter, 0, 
-            sizeof(struct handle_info) * NVM_DIS_RPC_MAX_ADAPTER, false, SCI_FLAG_SHARED);
+    status = _nvm_device_memory_get(&binding->dmem, dev, adapter, 0, SCI_FLAG_SHARED);
     if (status != 0)
     {
         free(binding);
