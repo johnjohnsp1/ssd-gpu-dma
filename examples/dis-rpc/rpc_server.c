@@ -15,8 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sisci_api.h>
-#include "dis/segment.h"
-#include "dis/node.h"
+#include "segment.h"
 #include "util.h"
 
 #define MAX_ADAPTS NVM_DIS_RPC_MAX_ADAPTER 

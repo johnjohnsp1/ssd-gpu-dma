@@ -7,7 +7,7 @@
 #include <sisci_types.h>
 #include <sisci_api.h>
 #include <sisci_error.h>
-#include "dis/segment.h"
+#include "segment.h"
 
 
 int segment_create(struct segment* segment, uint32_t segment_id, size_t size)

@@ -10,8 +10,7 @@
 #include <getopt.h>
 #include <string.h>
 #include <sisci_api.h>
-#include "dis/segment.h"
-#include "dis/node.h"
+#include "segment.h"
 #include "util.h"
 
 
