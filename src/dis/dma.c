@@ -330,6 +330,9 @@ int nvm_dis_dma_create(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, uint32_t adap
         return err;
     }
 
+    // Initialize DMA handle
+    _nvm_dma_handle_populate(*handle, ctrl, (uint64_t*) &md->io_mapping.ioaddr);
+
     return 0;
 }
 
@@ -338,7 +341,7 @@ int nvm_dis_dma_create(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, uint32_t adap
 /*
  * Map CUDA device memory for device.
  */
-int nvm_dis_dma_map_device(nvm_dma_t** map, const nvm_ctrl_t* ctrl, uint32_t adapter, uint32_t id, void* dptr, size_t size)
+int nvm_dis_dma_map_device(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, uint32_t adapter, uint32_t id, void* dptr, size_t size)
 {
     struct map_descriptor* md;
     *handle = NULL;
@@ -384,6 +387,9 @@ int nvm_dis_dma_map_device(nvm_dma_t** map, const nvm_ctrl_t* ctrl, uint32_t ada
         remove_local_segment(md);
         return err;
     }
+
+    // Initialize DMA handle
+    _nvm_dma_handle_populate(*handle, ctrl, (uint64_t*) &md->io_mapping.ioaddr);
 
     return 0;
 }

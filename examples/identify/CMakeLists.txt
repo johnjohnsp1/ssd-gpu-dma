@@ -4,3 +4,6 @@ project (disnvme)
 make_sample (userspace_identify userspace_identify "without_module.c")
 
 make_sample (module_identify module_identify "with_module.c")
+
+make_sample (smartio_identify smartio_identify "smartio.c")
+set_sisci (smartio_identify)
