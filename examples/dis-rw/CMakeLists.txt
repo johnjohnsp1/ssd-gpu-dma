@@ -1,5 +1,5 @@
 cmake_minimum_required (VERSION 3.1)
-project (disnvme)
+project (libnvm)
 
-make_sample (dis_rw dis_rw "rw.c")
-set_sisci (dis_rw)
+make_sample (dis-rw dis-rw "rw.c;segment.c;util.c")
+set_sisci (dis-rw)

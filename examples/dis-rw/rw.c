@@ -1,11 +1,12 @@
 #include <nvm_types.h>
 #include <nvm_ctrl.h>
 #include <nvm_dma.h>
-#include <nvm_manager.h>
-#include <nvm_rpc.h>
-#include <nvm_command.h>
+#include <nvm_admin.h>
+#include <nvm_aq.h>
+#include <nvm_cmd.h>
 #include <nvm_util.h>
 #include <nvm_queue.h>
+#include <nvm_error.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -17,9 +18,10 @@
 #include <stdlib.h>
 #include <sisci_api.h>
 #include <time.h>
-#include "dis/segment.h"
-#include "dis/node.h"
+#include "segment.h"
 #include "util.h"
+
+#define MIN(a, b) ((a) <= (b) ? (a) : (b))
 
 
 struct cl_args
@@ -42,11 +44,11 @@ static void show_help(const char* program_name);
 static void parse_opts(int argc, char** argv, struct cl_args* args);
 
 
-static int identify_controller(nvm_rpc_t rpc, nvm_ctrl_t ctrl, uint32_t adapter, nvm_ctrl_info_t* info)
+static int identify_controller(nvm_aq_ref ref, const nvm_ctrl_t* ctrl, uint32_t adapter, struct nvm_ctrl_info* info)
 {
     int status;
     struct segment segment;
-    nvm_dma_t identify_wnd;
+    nvm_dma_t* identify_wnd;
 
     status = segment_create(&segment, random_id(), 0x1000);
     if (status != 0)
@@ -63,24 +65,24 @@ static int identify_controller(nvm_rpc_t rpc, nvm_ctrl_t ctrl, uint32_t adapter,
         return status;
     }
 
-    status = nvm_rpc_ctrl_info(info, rpc, ctrl, identify_wnd->vaddr, identify_wnd->ioaddrs[0]);
+    status = nvm_admin_ctrl_info(ref, info, identify_wnd->vaddr, identify_wnd->ioaddrs[0]);
     if (status != 0)
     {
         fprintf(stderr, "Failed to identify controller: %s\n", strerror(status));
     }
 
-    dma_remove(&identify_wnd, &segment, adapter);
+    dma_remove(identify_wnd, &segment, adapter);
     segment_remove(&segment);
 
     return status;
 }
 
 
-static int identify_ns(nvm_rpc_t rpc, nvm_ctrl_t ctrl, uint32_t adapter, uint32_t ns_id, nvm_ns_info_t* info)
+static int identify_ns(nvm_aq_ref ref, const nvm_ctrl_t* ctrl, uint32_t adapter, uint32_t ns_id, struct nvm_ns_info* info)
 {
     int status;
     struct segment segment;
-    nvm_dma_t identify_wnd;
+    nvm_dma_t* identify_wnd;
 
     status = segment_create(&segment, random_id(), 0x1000);
     if (status != 0)
@@ -97,13 +99,13 @@ static int identify_ns(nvm_rpc_t rpc, nvm_ctrl_t ctrl, uint32_t adapter, uint32_
         return status;
     }
 
-    status = nvm_rpc_ns_info(info, rpc, ns_id, identify_wnd->vaddr, identify_wnd->ioaddrs[0]);
+    status = nvm_admin_ns_info(ref, info, ns_id, identify_wnd->vaddr, identify_wnd->ioaddrs[0]);
     if (status != 0)
     {
         fprintf(stderr, "Failed to identify namespace: %s\n", strerror(status));
     }
 
-    dma_remove(&identify_wnd, &segment, adapter);
+    dma_remove(identify_wnd, &segment, adapter);
     segment_remove(&segment);
 
     return status;
@@ -161,7 +163,7 @@ static void dump_memory(FILE* fp, void* vaddr, size_t size, bool ascii)
 }
 
 
-static size_t set_data_pointer(nvm_cmd_t* cmd, size_t page_size, size_t transfer_size, nvm_dma_t prp, size_t buffer_offset, nvm_dma_t buffer)
+static size_t set_data_pointer(nvm_cmd_t* cmd, size_t page_size, size_t transfer_size, const nvm_dma_t* prp, size_t buffer_offset, const nvm_dma_t* buffer)
 {
     // Set data pointer directly if possible
     if (transfer_size <= page_size)
@@ -176,13 +178,14 @@ static size_t set_data_pointer(nvm_cmd_t* cmd, size_t page_size, size_t transfer
     }
 
     // Create PRP list in memory
-    size_t pages_used = nvm_prp_list(prp->vaddr, page_size, transfer_size, prp->ioaddrs, &buffer->ioaddrs[buffer_offset + 1]);
+    // FIXME: not sure if the following calculation is correct
+    size_t pages_used = nvm_prp_list_page(transfer_size - buffer->page_size, page_size, prp->vaddr, &buffer->ioaddrs[buffer_offset + 1]);
     nvm_cmd_data_ptr(cmd, buffer->ioaddrs[buffer_offset], prp->ioaddrs[0]);
     return buffer_offset + pages_used + 1;
 }
 
 
-static size_t transfer(nvm_ctrl_info_t* ctrl, nvm_ns_info_t* ns, nvm_queue_t* cq, nvm_queue_t* sq, nvm_dma_t prp_list, nvm_dma_t buffer, size_t transfer_size, struct cl_args* args)
+static size_t transfer(struct nvm_ctrl_info* ctrl, struct nvm_ns_info* ns, nvm_queue_t* cq, nvm_queue_t* sq, nvm_dma_t* prp_list, nvm_dma_t* buffer, size_t transfer_size, struct cl_args* args)
 {
     nvm_cmd_t* cmd;
     nvm_cpl_t* cpl;
@@ -199,10 +202,10 @@ static size_t transfer(nvm_ctrl_info_t* ctrl, nvm_ns_info_t* ns, nvm_queue_t* cq
     // Divide transfer into transfer_size sized chunks and prepare commands
     while (i_buffer_page < buffer->n_ioaddrs)
     {
-        size_t curr_transfer_size = _MIN(transfer_size, blk_size * 0x10000);
-        uint64_t n_blks = DMA_SIZE(curr_transfer_size, blk_size) / blk_size;
+        size_t curr_transfer_size = MIN(transfer_size, blk_size * 0x10000);
+        uint64_t n_blks = NVM_PAGE_ALIGN(curr_transfer_size, blk_size) / blk_size;
 
-        cmd = sq_enqueue(sq);
+        cmd = nvm_sq_enqueue(sq);
 
         // If queue is full, submit what we have so far
         // and wait for the first completion to come in
@@ -210,25 +213,25 @@ static size_t transfer(nvm_ctrl_info_t* ctrl, nvm_ns_info_t* ns, nvm_queue_t* cq
         {
             if (n_cmds > 0)
             {
-                sq_submit(sq);
+                nvm_sq_submit(sq);
             }
 
             fprintf(stderr, "Queue wrap\n");
 
-            cpl = cq_dequeue_block(cq, ctrl->timeout);
+            cpl = nvm_cq_dequeue_block(cq, ctrl->timeout);
             if (cpl == NULL)
             {
                 fprintf(stderr, "Controller appears to be dead, aborting...\n");
                 return 0;
             }
-            else if (!CPL_OK(cpl))
+            else if (!NVM_ERR_OK(cpl))
             {
-                fprintf(stderr, "Completion failed: %s\n", nvm_strerror(cpl));
+                fprintf(stderr, "Completion failed: %s\n", nvm_strerror(NVM_ERR_STATUS(cpl)));
                 return 0;
             }
 
-            sq_update(sq, cpl);
-            cq_update(cq);
+            nvm_sq_update(sq);
+            nvm_cq_update(cq);
             ++n_cpls;
             continue;
         }
@@ -246,23 +249,23 @@ static size_t transfer(nvm_ctrl_info_t* ctrl, nvm_ns_info_t* ns, nvm_queue_t* cq
     }
 
     // Submit all commands
-    sq_submit(sq);
+    nvm_sq_submit(sq);
 
     // Wait for all commands to complete
-    while ((n_cmds - n_cpls) > 0 && (cpl = cq_dequeue_block(cq, ctrl->timeout)) != NULL)
+    while ((n_cmds - n_cpls) > 0 && (cpl = nvm_cq_dequeue_block(cq, ctrl->timeout)) != NULL)
     {
-        sq_update(sq, cpl);
+        nvm_sq_update(sq);
 
-        if (!CPL_OK(cpl))
+        if (!NVM_ERR_OK(cpl))
         {
-            fprintf(stderr, "Completion failed: %s\n", nvm_strerror(cpl));
+            fprintf(stderr, "Completion failed: %s\n", nvm_strerror(NVM_ERR_STATUS(cpl)));
             return 0;
         }
 
         ++n_cpls;
     }
 
-    cq_update(cq);
+    nvm_cq_update(cq);
 
     if ((n_cmds - n_cpls) > 0)
     {
@@ -274,24 +277,25 @@ static size_t transfer(nvm_ctrl_info_t* ctrl, nvm_ns_info_t* ns, nvm_queue_t* cq
 }
 
 
-static int start_transfer(nvm_rpc_t rpc, nvm_ctrl_t ctrl, struct cl_args* args, nvm_queue_t* cq, nvm_queue_t* sq, struct segment* buffer)
+static int start_transfer(nvm_aq_ref ref, const nvm_ctrl_t* ctrl, struct cl_args* args, nvm_queue_t* cq, nvm_queue_t* sq, struct segment* buffer)
 {
     int status;
     struct segment prp_list;
-    nvm_dma_t prp_wnd;
-    nvm_dma_t rw_wnd;
-    nvm_ctrl_info_t ctrl_info;
-    nvm_ns_info_t ns_info;
+    nvm_dma_t* prp_wnd;
+    nvm_dma_t* rw_wnd;
+    struct nvm_ctrl_info ctrl_info;
+    struct nvm_ns_info ns_info;
+
 
     // Get controller information
-    status = identify_controller(rpc, ctrl, args->ctrl_adapter, &ctrl_info);
+    status = identify_controller(ref, ctrl, args->ctrl_adapter, &ctrl_info);
     if (status != 0)
     {
         return 2;
     }
 
     // Get namespace information
-    status = identify_ns(rpc, ctrl, args->ctrl_adapter, args->namespace, &ns_info);
+    status = identify_ns(ref, ctrl, args->ctrl_adapter, args->namespace, &ns_info);
     if (status != 0)
     {
         return 2;
@@ -304,13 +308,20 @@ static int start_transfer(nvm_rpc_t rpc, nvm_ctrl_t ctrl, struct cl_args* args, 
         return 2;
     }
 
-    size_t transfer_size = _MIN(ctrl_info.max_transfer_size, args->length);
-    size_t n_prp_pages = nvm_num_prp_pages(ctrl->page_size, transfer_size);
+    memset(rw_wnd->vaddr, 0, buffer->size);
+    if (args->data != NULL)
+    {
+        strncpy(((char*) rw_wnd->vaddr) + args->offset, args->data, buffer->size - args->offset);
+    }
+
+
+    size_t transfer_size = MIN(ctrl_info.max_data_size, args->length);
+    size_t n_prp_pages = 1;
 
     status = segment_create(&prp_list, random_id(), n_prp_pages * ctrl->page_size);
     if (status != 0)
     {
-        dma_remove(&rw_wnd, buffer, args->ctrl_adapter);
+        dma_remove(rw_wnd, buffer, args->ctrl_adapter);
         fprintf(stderr, "Failed to create PRP list: %s\n", strerror(status));
         return 1;
     }
@@ -318,7 +329,7 @@ static int start_transfer(nvm_rpc_t rpc, nvm_ctrl_t ctrl, struct cl_args* args, 
     status = dma_create(&prp_wnd, ctrl, &prp_list, args->ctrl_adapter);
     if (status != 0)
     {
-        dma_remove(&rw_wnd, buffer, args->ctrl_adapter);
+        dma_remove(rw_wnd, buffer, args->ctrl_adapter);
         segment_remove(&prp_list);
         fprintf(stderr, "Failed to create PRP window: %s\n", strerror(status));
         return 2;
@@ -328,10 +339,10 @@ static int start_transfer(nvm_rpc_t rpc, nvm_ctrl_t ctrl, struct cl_args* args, 
     {
         fprintf(stderr, "Namespace block size  : %zu\n", ns_info.lba_data_size);
         fprintf(stderr, "Total transfer size   : %zu\n", args->length);
-        fprintf(stderr, "Max transfer data size: %zu\n", ctrl_info.max_transfer_size);
+        fprintf(stderr, "Max transfer data size: %zu\n", ctrl_info.max_data_size);
         fprintf(stderr, "Start block           : %zu\n", args->start_lba);
         fprintf(stderr, "Number of blocks      : %zu\n", 
-                DMA_SIZE( args->length, ns_info.lba_data_size ) / ns_info.lba_data_size);
+                NVM_PAGE_ALIGN( args->length, ns_info.lba_data_size ) / ns_info.lba_data_size);
     }
 
     size_t cmds = transfer(&ctrl_info, &ns_info, cq, sq, prp_wnd, rw_wnd, transfer_size, args);
@@ -343,68 +354,60 @@ static int start_transfer(nvm_rpc_t rpc, nvm_ctrl_t ctrl, struct cl_args* args, 
 
     if (args->data == NULL)
     {
-        dump_memory(stdout, buffer->vaddr, args->length, args->use_ascii);
+        dump_memory(stdout, rw_wnd->vaddr, args->length, args->use_ascii);
     }
 
     fprintf(stderr, "Number of commands: %zu\n", cmds);
 
 out:
-    dma_remove(&prp_wnd, &prp_list, args->ctrl_adapter);
+    dma_remove(prp_wnd, &prp_list, args->ctrl_adapter);
     segment_remove(&prp_list);
-    dma_remove(&rw_wnd, buffer, args->ctrl_adapter);
+    dma_remove(rw_wnd, buffer, args->ctrl_adapter);
     return status;
 }
 
 
-static int launch(nvm_ctrl_t ctrl, struct cl_args* args, struct segment* buffer)
+static int launch(const nvm_ctrl_t* ctrl, struct cl_args* args, struct segment* buffer)
 {
     int status;
     struct segment q_mem;
-    nvm_manager_t mngr;
-    nvm_rpc_t rpc;
-    nvm_dma_t wnd;
+    nvm_aq_ref ref;
+    nvm_dma_t* wnd;
     nvm_queue_t cq;
     nvm_queue_t sq;
 
+    fprintf(stderr, "Creating queue memory...\n");
     status = segment_create(&q_mem, random_id(), ctrl->page_size * 4);
     if (status != 0)
     {
         fprintf(stderr, "Failed to create queue memory: %s\n", strerror(status));
         return 1;
     }
-    memset(q_mem.vaddr, 0, q_mem.size);
 
     // Create DMA window
+    fprintf(stderr, "Mapping queue memory for controller...\n");
     status = dma_create(&wnd, ctrl, &q_mem, args->ctrl_adapter);
     if (status != 0)
     {
         segment_remove(&q_mem);
         return 2;
     }
+    memset(wnd->vaddr, 0, q_mem.size);
 
     // Create admin queue manager
-    status = nvm_manager_register(&mngr, ctrl, wnd);
+    fprintf(stderr, "Resetting controller...\n");
+    status = nvm_aq_create(&ref, ctrl, wnd);
     if (status != 0)
     {
-        dma_remove(&wnd, &q_mem, args->ctrl_adapter);
+        dma_remove(wnd, &q_mem, args->ctrl_adapter);
         segment_remove(&q_mem);
         fprintf(stderr, "Failed to register manager: %s\n", strerror(status));
         return 2;
     }
 
-    // Get RPC reference to manager
-    status = nvm_rpc_bind_local(&rpc, mngr);
-    if (status != 0)
-    {
-        nvm_manager_unregister(mngr);
-        dma_remove(&wnd, &q_mem, args->ctrl_adapter);
-        segment_remove(&q_mem);
-        fprintf(stderr, "Failed to get RPC reference: %s\n", strerror(status));
-        return 2;
-    }
-
     // Set number of queues
-    status = nvm_rpc_set_num_queues(rpc, 1, 1);
+    fprintf(stderr, "Setting number of IO queues...\n");
+    status = nvm_admin_set_num_queues(ref, 1, 1);
     if (status != 0)
     {
         fprintf(stderr, "Failed to set number of queues: %s\n", strerror(status));
@@ -413,7 +416,8 @@ static int launch(nvm_ctrl_t ctrl, struct cl_args* args, struct segment* buffer)
     }
 
     // Create queues
-    status = nvm_rpc_cq_create(&cq, rpc, ctrl, 1, DMA_VADDR(wnd->vaddr, wnd->page_size, 2), wnd->ioaddrs[2]);
+    fprintf(stderr, "Creating completion queue...\n");
+    status = nvm_admin_cq_create(ref, &cq, 1, NVM_PTR_OFFSET(wnd->vaddr, wnd->page_size, 2), wnd->ioaddrs[2]);
     if (status != 0)
     {
         fprintf(stderr, "Failed to create completion queue: %s\n", strerror(status));
@@ -421,7 +425,7 @@ static int launch(nvm_ctrl_t ctrl, struct cl_args* args, struct segment* buffer)
         goto out;
     }
 
-    status = nvm_rpc_sq_create(&sq, rpc, ctrl, &cq, 1, DMA_VADDR(wnd->vaddr, wnd->page_size, 3), wnd->ioaddrs[3]);
+    status = nvm_admin_sq_create(ref, &sq, &cq, 1, NVM_PTR_OFFSET(wnd->vaddr, wnd->page_size, 3), wnd->ioaddrs[3]);
     if (status != 0)
     {
         fprintf(stderr, "Failed to create submission queue: %s\n", strerror(status));
@@ -429,12 +433,11 @@ static int launch(nvm_ctrl_t ctrl, struct cl_args* args, struct segment* buffer)
         goto out;
     }
 
-    status = start_transfer(rpc, ctrl, args, &cq, &sq, buffer);
+    status = start_transfer(ref, ctrl, args, &cq, &sq, buffer);
 
 out:
-    nvm_rpc_unbind(rpc);
-    nvm_manager_unregister(mngr);
-    dma_remove(&wnd, &q_mem, args->ctrl_adapter);
+    nvm_aq_destroy(ref);
+    dma_remove(wnd, &q_mem, args->ctrl_adapter);
     segment_remove(&q_mem);
     return status;
 }
@@ -442,7 +445,7 @@ out:
 
 int main(int argc, char** argv)
 {
-    nvm_ctrl_t ctrl;
+    nvm_ctrl_t* ctrl;
     sci_error_t err;
 
     struct cl_args args;
@@ -456,6 +459,7 @@ int main(int argc, char** argv)
     }
 
     // Get controller reference
+    fprintf(stderr, "Getting controller reference...\n");
     int status = nvm_dis_ctrl_init(&ctrl, args.smartio_dev_id, args.ctrl_adapter);
     if (status != 0)
     {
@@ -464,7 +468,8 @@ int main(int argc, char** argv)
     }
 
     struct segment buffer;
-    status = segment_create(&buffer, random_id(), DMA_SIZE(args.length, ctrl->page_size));
+    fprintf(stderr, "Creating data segment...\n");
+    status = segment_create(&buffer, random_id(), NVM_PAGE_ALIGN(args.length, ctrl->page_size));
     if (status != 0)
     {
         nvm_ctrl_free(ctrl);
@@ -472,12 +477,6 @@ int main(int argc, char** argv)
         exit(1);
     }
     
-    memset(buffer.vaddr, 0, buffer.size);
-    if (args.data != NULL)
-    {
-        strncpy(((char*) buffer.vaddr) + args.offset, args.data, buffer.size - args.offset);
-    }
-
     status = launch(ctrl, &args, &buffer);
 
     segment_remove(&buffer);
