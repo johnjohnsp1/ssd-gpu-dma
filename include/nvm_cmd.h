@@ -80,7 +80,10 @@ __device__ __host__ static inline
 void nvm_cmd_rw_blks(nvm_cmd_t* cmd, uint64_t start_lba, uint16_t n_blks)
 {
     cmd->dword[10] = start_lba;
+    cmd->dword[11] = start_lba >> 32;
     cmd->dword[12] = (n_blks - 1) & 0xffff;
+    //cmd->dword[14] = 0;
+    //cmd->dword[15] = 0;
 }
 
 
@@ -89,45 +92,40 @@ void nvm_cmd_rw_blks(nvm_cmd_t* cmd, uint64_t start_lba, uint16_t n_blks)
  * Build a PRP list consisting of PRP entries.
  *
  * Populate a memory page with PRP entries required for a transfer.
- * Returns the number of PRP entries in the list.
+ * Returns the number of PRP entries used
  *
  * Note: currently, only a PRP lists can only be a single page
  */
 __host__ __device__ static inline
-size_t nvm_prp_list_page(const struct nvm_ctrl_info* info, 
-                         size_t n_pages,
+size_t nvm_prp_list_page(size_t data_size,
+                         size_t page_size,
                          void* list_vaddr, 
                          const uint64_t* data_ioaddrs)
 {
-    size_t prps_per_page = info->page_size / sizeof(uint64_t);
-    size_t max_prps;
+    size_t prps_per_page = page_size / sizeof(uint64_t);
+    size_t n_prps;
     size_t i_prp;
     uint64_t* list_ptr;
 
-    if (n_pages == 0)
+    if (data_size == 0)
     {
         return 0;
     }
 
-    max_prps = ((info->max_data_size + info->page_size - 1) & ~(info->page_size - 1)) / info->page_size;
+    n_prps = ((data_size + page_size - 1) & ~(page_size - 1)) / page_size;
 
-    if (max_prps < n_pages)
+    if (prps_per_page < n_prps)
     {
-        n_pages = max_prps;
-    }
-
-    if (prps_per_page < n_pages)
-    {
-        n_pages = prps_per_page;
+        n_prps = prps_per_page;
     }
    
     list_ptr = (uint64_t*) list_vaddr;
-    for (i_prp = 0; i_prp < n_pages; ++i_prp)
+    for (i_prp = 0; i_prp < n_prps; ++i_prp)
     {
         list_ptr[i_prp] = data_ioaddrs[i_prp];
     }
 
-    return i_prp * info->page_size;
+    return i_prp;
 }
 
 

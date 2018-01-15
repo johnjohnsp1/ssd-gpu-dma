@@ -17,10 +17,10 @@ struct transfer_info
 };
 
 
-int write_zeros(nvm_ctrl_t ctrl, nvm_queue_t* cq, nvm_queue_t* sq, const struct transfer_info* ti);
+int write_zeros(const nvm_ctrl_t* ctrl, nvm_queue_t* cq, nvm_queue_t* sq,  const struct transfer_info* ti);
 
 
-int read_pages(nvm_ctrl_t ctrl, nvm_queue_t* cq, nvm_queue_t* sq, const struct transfer_info* ti);
+int read_pages(const nvm_ctrl_t* ctrl, nvm_queue_t* cq, nvm_queue_t* sq, const struct transfer_info* ti);
 
 
 #endif

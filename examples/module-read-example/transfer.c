@@ -1,10 +1,11 @@
 #define _GNU_SOURCE
 #include <nvm_types.h>
 #include <nvm_util.h>
+#include <nvm_error.h>
 #include <nvm_ctrl.h>
 #include <nvm_dma.h>
 #include <nvm_queue.h>
-#include <nvm_command.h>
+#include <nvm_cmd.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -15,7 +16,10 @@
 #include "transfer.h"
 
 
-static int create_buffer(nvm_dma_t* buffer, nvm_ctrl_t ctrl, size_t size)
+#define MIN(a, b) ((a) <= (b) ? (a) : (b))
+
+
+static int create_buffer(nvm_dma_t** buffer, const nvm_ctrl_t* ctrl, size_t size)
 {
     int err;
     void* ptr = NULL;
@@ -28,7 +32,7 @@ static int create_buffer(nvm_dma_t* buffer, nvm_ctrl_t ctrl, size_t size)
         return err;
     }
 
-    err = nvm_dma_window_host_map(buffer, ctrl, ptr, size);
+    err = nvm_dma_map_host(buffer, ctrl, ptr, size);
     if (err != 0)
     {
         free(ptr);
@@ -41,12 +45,12 @@ static int create_buffer(nvm_dma_t* buffer, nvm_ctrl_t ctrl, size_t size)
 }
 
 
-static void destroy_buffer(nvm_dma_t buffer)
+static void destroy_buffer(nvm_dma_t* buffer)
 {
     if (buffer != NULL)
     {
         void* ptr = buffer->vaddr;
-        nvm_dma_window_free(buffer);
+        nvm_dma_unmap(buffer);
         free(ptr);
     }
 }
@@ -70,19 +74,19 @@ static void* process_completions(struct thread_args* args)
 
     while (*args->flag)
     {
-        while ((cpl = cq_dequeue(cq)) != NULL)
+        while ((cpl = nvm_cq_dequeue(cq)) != NULL)
         {
-            sq_update_unchecked(sq);
+            nvm_sq_update(sq);
 
-            if (!CPL_OK(cpl))
+            if (!NVM_ERR_OK(cpl))
             {
-                fprintf(stderr, "Command failed: %s\n", nvm_strerror(cpl));
+                fprintf(stderr, "Command failed: %s\n", nvm_strerror(NVM_ERR_STATUS(cpl)));
             }
 
             ++cpls;
         }
 
-        cq_update(cq);
+        nvm_cq_update(cq);
         pthread_yield();
     }
 
@@ -137,21 +141,21 @@ static int completion_thread_join(pthread_t thread, uint64_t timeout, size_t exp
 
     while (args->cpls < expected)
     {
-        nvm_cpl_t* cpl = cq_dequeue_block(args->cq, timeout);
+        nvm_cpl_t* cpl = nvm_cq_dequeue_block(args->cq, timeout);
         if (cpl == NULL)
         {
             fprintf(stderr, "Controller timed out!\n");
             return ETIME;
         }
 
-        sq_update_unchecked(args->sq);
+        nvm_sq_update(args->sq);
 
-        if (!CPL_OK(cpl))
+        if (!NVM_ERR_OK(cpl))
         {
-            fprintf(stderr, "Command failed: %s\n", nvm_strerror(cpl));
+            fprintf(stderr, "Command failed: %s\n", nvm_strerror(NVM_ERR_STATUS(cpl)));
         }
 
-        cq_update(args->cq);
+        nvm_cq_update(args->cq);
         args->cpls++;
     }
 
@@ -160,12 +164,12 @@ static int completion_thread_join(pthread_t thread, uint64_t timeout, size_t exp
 }
 
 
-int read_pages(nvm_ctrl_t ctrl, nvm_queue_t* cq, nvm_queue_t* sq, const struct transfer_info* ti)
+int read_pages(const nvm_ctrl_t* ctrl, nvm_queue_t* cq, nvm_queue_t* sq, const struct transfer_info* ti)
 {
     int err;
     int run = 1;
-    nvm_dma_t buffer = NULL;
-    nvm_dma_t prp_list = NULL;
+    nvm_dma_t* buffer = NULL;
+    nvm_dma_t* prp_list = NULL;
     size_t cmds = 0;
     size_t nonzero = 0;
     volatile unsigned char* ptr;
@@ -177,12 +181,9 @@ int read_pages(nvm_ctrl_t ctrl, nvm_queue_t* cq, nvm_queue_t* sq, const struct t
     }
     memset(buffer->vaddr, 0xff, ti->blk_size * ti->n_blks);
 
-    size_t chunk_size = DMA_ALIGN(ti->chunk_size, ti->blk_size);
-    size_t n_prp_pages = nvm_num_prp_pages(ctrl->page_size, chunk_size);
-    size_t n_prp_lists = (ti->blk_size * ti->n_blks) / chunk_size 
-        + ((ti->blk_size * ti->n_blks) % chunk_size >= 2 * ctrl->page_size);
+    size_t chunk_size = ti->chunk_size & NVM_PAGE_MASK(ti->blk_size);
 
-    err = create_buffer(&prp_list, ctrl, n_prp_lists * n_prp_pages * ctrl->page_size);
+    err = create_buffer(&prp_list, ctrl, ctrl->page_size);
     if (err != 0)
     {
         goto out;
@@ -198,23 +199,23 @@ int read_pages(nvm_ctrl_t ctrl, nvm_queue_t* cq, nvm_queue_t* sq, const struct t
     size_t remaining_blks = ti->n_blks;
     size_t buffer_page = 0;
     uint64_t current_blk = ti->start_lba;
-    size_t current_list = 0;
 
     fprintf(stderr, "Reading from disk...\n");
     while (remaining_blks > 0)
     {
-        size_t transfer_blks = _MIN(remaining_blks, chunk_size / ti->blk_size);
+        size_t transfer_blks = MIN(remaining_blks, chunk_size / ti->blk_size);
         size_t transfer_size = transfer_blks * ti->blk_size;
 
-        nvm_cmd_t* cmd = sq_enqueue(sq);
+        nvm_cmd_t* cmd = nvm_sq_enqueue(sq);
         if (cmd == NULL)
         {
-            sq_submit(sq);
+            nvm_sq_submit(sq);
             pthread_yield();
             continue;
         }
 
         ++cmds;
+
         uint64_t dptr1 = buffer->ioaddrs[buffer_page++];
         uint64_t dptr2 = 0;
 
@@ -228,36 +229,28 @@ int read_pages(nvm_ctrl_t ctrl, nvm_queue_t* cq, nvm_queue_t* sq, const struct t
         }
         else
         {
-            dptr2 = prp_list->ioaddrs[current_list];
-            
-            size_t prp_list_offset = current_list++ * n_prp_pages;
-
-            buffer_page += nvm_prp_list(DMA_WND_VADDR(prp_list, prp_list_offset), buffer->page_size, 
-                    transfer_size - buffer->page_size, &prp_list->ioaddrs[prp_list_offset], &buffer->ioaddrs[buffer_page]);
+            dptr2 = prp_list->ioaddrs[0];
+            size_t old = buffer_page;
+            buffer_page += nvm_prp_list_page(transfer_size - buffer->page_size, ctrl->page_size, prp_list->vaddr, &buffer->ioaddrs[buffer_page]);
         }
+
+        fprintf(stderr, "current_blk=%zu, n_blks=%zu, page=%zu\n", current_blk, transfer_blks, buffer_page);
 
         nvm_cmd_header(cmd, NVM_IO_READ, ti->ns);
         nvm_cmd_data_ptr(cmd, dptr1, dptr2);
-
-        cmd->dword[10] = current_blk;
-        cmd->dword[11] = current_blk >> 32;
-        cmd->dword[12] = (transfer_blks - 1) & 0xffff;
-        cmd->dword[13] = 0;
-        cmd->dword[14] = 0;
-        cmd->dword[15] = 0;
+        nvm_cmd_rw_blks(cmd, current_blk, transfer_blks);
 
         current_blk += transfer_blks;
         remaining_blks -= transfer_blks;
     }
 
-    sq_submit(sq);
+    nvm_sq_submit(sq);
     pthread_yield();
 
     fprintf(stderr, "Waiting for completions...\n");
     run = 0;
     completion_thread_join(thread, ctrl->timeout, cmds);
     
-out:
     ptr = buffer->vaddr;
     for (size_t i = 0, n = ti->n_blks * ti->blk_size; i < n; ++i)
     {
@@ -266,15 +259,17 @@ out:
             nonzero += 1;
         }
     }
+    fprintf(stderr, "Commands used: %zu, number of non-zero bytes: %zx\n", cmds, nonzero);
+
+out:
 
     destroy_buffer(prp_list);
     destroy_buffer(buffer);
-    fprintf(stderr, "Commands used: %zu, number of non-zero bytes: %zx\n", cmds, nonzero);
     return 0;
 }
 
 
-int write_zeros(nvm_ctrl_t ctrl, nvm_queue_t* cq, nvm_queue_t* sq, const struct transfer_info* ti)
+int write_zeros(const nvm_ctrl_t* ctrl, nvm_queue_t* cq, nvm_queue_t* sq, const struct transfer_info* ti)
 {
     nvm_cmd_t* cmd;
     size_t remaining_blks = ti->n_blks;
@@ -283,7 +278,7 @@ int write_zeros(nvm_ctrl_t ctrl, nvm_queue_t* cq, nvm_queue_t* sq, const struct 
     int run = 1;
     int err;
 
-    nvm_dma_t buffer;
+    nvm_dma_t* buffer;
     err = create_buffer(&buffer, ctrl, ctrl->page_size);
     if (err != 0)
     {
@@ -302,13 +297,12 @@ int write_zeros(nvm_ctrl_t ctrl, nvm_queue_t* cq, nvm_queue_t* sq, const struct 
     fprintf(stderr, "Writing zeroes to disk...\n");
     while (remaining_blks > 0)
     {
-        //size_t current_blks = _MIN(remaining_blks, ti->chunk_size / ti->blk_size);
-        size_t current_blks = _MIN(remaining_blks, DMA_SIZE(2 * ctrl->page_size, ti->blk_size) / ti->blk_size);
+        size_t current_blks = MIN(remaining_blks, NVM_PAGE_ALIGN(2 * buffer->page_size, ti->blk_size) / ti->blk_size);
 
-        cmd = sq_enqueue(sq);
+        cmd = nvm_sq_enqueue(sq);
         if (cmd == NULL)
         {
-            sq_submit(sq);
+            nvm_sq_submit(sq);
             pthread_yield();
             continue;
         }
@@ -319,18 +313,13 @@ int write_zeros(nvm_ctrl_t ctrl, nvm_queue_t* cq, nvm_queue_t* sq, const struct 
 
         nvm_cmd_header(cmd, NVM_IO_WRITE, ti->ns);
         nvm_cmd_data_ptr(cmd, buffer->ioaddrs[0], buffer->ioaddrs[0]);
-
-        cmd->dword[10] = blk_offset;
-        cmd->dword[11] = blk_offset >> 32;
-        cmd->dword[12] = (current_blks - 1) & 0xffff;
-        cmd->dword[14] = 0;
-        cmd->dword[15] = 0;
+        nvm_cmd_rw_blks(cmd, blk_offset, current_blks);
 
         remaining_blks -= current_blks;
         blk_offset += current_blks;
     }
 
-    sq_submit(sq);
+    nvm_sq_submit(sq);
     pthread_yield();
 
     fprintf(stderr, "Waiting for completion...\n");

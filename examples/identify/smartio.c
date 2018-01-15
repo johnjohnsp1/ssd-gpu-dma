@@ -93,6 +93,7 @@ int main(int argc, char** argv)
         fprintf(stderr, "Failed to create local segment: %s\n", strerror(status));
         exit(status);
     }
+    memset(window->vaddr, 0, 3 * 0x1000);
 
     fprintf(stderr, "Resetting controller and setting up admin queues...\n");
     nvm_aq_ref aq;

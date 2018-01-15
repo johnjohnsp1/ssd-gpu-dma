@@ -137,6 +137,7 @@ int main(int argc, char** argv)
         nvm_ctrl_free(ctrl);
         exit(2);
     }
+    memset(memory, 0, 3 * page_size);
 
     status = nvm_dma_map_host(&window, ctrl, memory, 3 * page_size);
     if (status != 0)

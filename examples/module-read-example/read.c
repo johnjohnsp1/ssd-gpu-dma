@@ -3,10 +3,9 @@
 #include <nvm_util.h>
 #include <nvm_ctrl.h>
 #include <nvm_dma.h>
-#include <nvm_manager.h>
-#include <nvm_rpc.h>
+#include <nvm_admin.h>
+#include <nvm_aq.h>
 #include <nvm_queue.h>
-#include <nvm_command.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -16,16 +15,17 @@
 #include <errno.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <limits.h>
 #include "transfer.h"
-#include "util.h"
 
 
-static int load_transfer_info(struct transfer_info* ti, nvm_rpc_t ref, nvm_ctrl_t ctrl)
+static int load_transfer_info(struct transfer_info* ti, nvm_aq_ref ref, const nvm_ctrl_t* ctrl)
 {
     int err;
-    size_t page_size = _MAX(ctrl->page_size, 0x1000);
+    size_t page_size = ctrl->page_size;
     void* page_ptr = NULL;
-    nvm_dma_t page_dma = NULL;
+    nvm_dma_t* page_dma = NULL;
 
     err = posix_memalign(&page_ptr, ctrl->page_size, page_size);
     if (err != 0)
@@ -34,23 +34,23 @@ static int load_transfer_info(struct transfer_info* ti, nvm_rpc_t ref, nvm_ctrl_
         goto out;
     }
 
-    err = nvm_dma_window_host_map(&page_dma, ctrl, page_ptr, page_size);
+    err = nvm_dma_map_host(&page_dma, ctrl, page_ptr, page_size);
     if (err != 0)
     {
         fprintf(stderr, "Failed to map page buffer: %s\n", strerror(err));
         goto out;
     }
 
-    nvm_ctrl_info_t ci;
-    err = nvm_rpc_ctrl_info(&ci, ref, ctrl, page_dma->vaddr, page_dma->ioaddrs[0]);
+    struct nvm_ctrl_info ci;
+    err = nvm_admin_ctrl_info(ref, &ci, page_dma->vaddr, page_dma->ioaddrs[0]);
     if (err != 0)
     {
         fprintf(stderr, "Failed to get controller information: %s\n", strerror(err));
         goto out;
     }
 
-    nvm_ns_info_t ni;
-    err = nvm_rpc_ns_info(&ni, ref, ti->ns, page_dma->vaddr, page_dma->ioaddrs[0]);
+    struct nvm_ns_info ni;
+    err = nvm_admin_ns_info(ref, &ni, ti->ns, page_dma->vaddr, page_dma->ioaddrs[0]);
     if (err != 0)
     {
         fprintf(stderr, "Failed to get namespace information: %s\n", strerror(err));
@@ -59,34 +59,34 @@ static int load_transfer_info(struct transfer_info* ti, nvm_rpc_t ref, nvm_ctrl_
 
     ti->page_size = ctrl->page_size;
     ti->blk_size = ni.lba_data_size;
-    ti->chunk_size = ci.max_transfer_size;
+    ti->chunk_size = ci.max_data_size;
 
 out:
-    nvm_dma_window_free(page_dma);
+    nvm_dma_unmap(page_dma);
     free(page_ptr);
     return err;
 }
 
 
-static int create_queues(nvm_ctrl_t ctrl, nvm_rpc_t ref, nvm_dma_t qdma, nvm_queue_t* cq, nvm_queue_t* sq)
+static int create_queues(nvm_aq_ref ref, const nvm_dma_t* window, nvm_queue_t* cq, nvm_queue_t* sq)
 {
     int err;
 
-    err = nvm_rpc_set_num_queues(ref, 1, 1);
+    err = nvm_admin_set_num_queues(ref, 1, 1);
     if (err != 0)
     {
         fprintf(stderr, "Failed to set number of queues: %s\n", strerror(err));
         return 1;
     }
 
-    err = nvm_rpc_cq_create(cq, ref, ctrl, 1, DMA_VADDR(qdma->vaddr, qdma->page_size, 2), qdma->ioaddrs[2]);
+    err = nvm_admin_cq_create(ref, cq, 1, NVM_DMA_OFFSET(window, 2), window->ioaddrs[2]);
     if (err != 0)
     {
         fprintf(stderr, "Failed to create CQ: %s\n", strerror(err));
         return 1;
     }
 
-    err = nvm_rpc_sq_create(sq, ref, ctrl, cq, 1, DMA_VADDR(qdma->vaddr, qdma->page_size, 3), qdma->ioaddrs[3]);
+    err = nvm_admin_sq_create(ref, sq, cq, 1, NVM_DMA_OFFSET(window, 3), window->ioaddrs[3]);
     if (err != 0)
     {
         fprintf(stderr, "Failed to create SQ: %s\n", strerror(err));
@@ -100,6 +100,32 @@ static int create_queues(nvm_ctrl_t ctrl, nvm_rpc_t ref, nvm_dma_t qdma, nvm_que
 static void parse_args(int argc, char** argv, struct transfer_info* ti, uint64_t* ctrl_id, bool* write);
 
 
+static nvm_ctrl_t* get_ctrl(uint64_t device_id)
+{
+    char path[64];
+    sprintf(path, "/dev/disnvme%lu", device_id);
+
+    int fd = open(path, O_RDWR | O_NONBLOCK);
+    if (fd < 0)
+    {
+        fprintf(stderr, "Failed to open device file: %s\n", strerror(errno));
+        return NULL;
+    }
+
+    nvm_ctrl_t* ctrl = NULL;
+    int status = nvm_ctrl_init(&ctrl, fd);
+    if (status != 0)
+    {
+        close(fd);
+        fprintf(stderr, "Failed to get controller reference: %s\n", strerror(status));
+        return NULL;
+    }
+
+    close(fd);
+    return ctrl;
+}
+
+
 int main(int argc, char** argv)
 {
     struct transfer_info ti;
@@ -107,16 +133,14 @@ int main(int argc, char** argv)
     bool write = false;
     parse_args(argc, argv, &ti, &ctrl_id, &write);
 
-    nvm_ctrl_t ctrl;
-    int err = nvm_ctrl_init(&ctrl, ctrl_id);
-    if (err != 0)
+    nvm_ctrl_t* ctrl = get_ctrl(ctrl_id);
+    if (ctrl == NULL)
     {
-        fprintf(stderr, "Failed to get controller reference: %s\n", strerror(err));
         exit(1);
     }
 
     void* aq_mem;
-    err = posix_memalign(&aq_mem, ctrl->page_size, ctrl->page_size * 4);
+    int err = posix_memalign(&aq_mem, ctrl->page_size, ctrl->page_size * 4);
     if (err != 0)
     {
         fprintf(stderr, "Failed to allocate page-aligned memory for admin queues: %s\n", strerror(errno));
@@ -124,8 +148,8 @@ int main(int argc, char** argv)
         exit(2);
     }
 
-    nvm_dma_t aq_dma;
-    err = nvm_dma_window_host_map(&aq_dma, ctrl, aq_mem, ctrl->page_size * 4);
+    nvm_dma_t* aq_dma;
+    err = nvm_dma_map_host(&aq_dma, ctrl, aq_mem, ctrl->page_size * 4);
     if (err != 0)
     {
         free(aq_mem);
@@ -136,23 +160,20 @@ int main(int argc, char** argv)
     memset(aq_mem, 0, ctrl->page_size * 4);
 
     fprintf(stderr, "Resetting controller....\n");
-    nvm_manager_t mngr;
-    err = nvm_manager_register(&mngr, ctrl, aq_dma);
+    nvm_aq_ref ref;
+    err = nvm_aq_create(&ref, ctrl, aq_dma);
     if (err != 0)
     {
-        nvm_dma_window_free(aq_dma);
+        nvm_dma_unmap(aq_dma);
         free(aq_mem);
         nvm_ctrl_free(ctrl);
         fprintf(stderr, "Failed to initialize controller: %s\n", strerror(err));
         exit(1);
     }
 
-    nvm_rpc_t ref;
-    nvm_rpc_bind_local(&ref, mngr);
-
     nvm_queue_t cq;
     nvm_queue_t sq;
-    err = create_queues(ctrl, ref, aq_dma, &cq, &sq);
+    err = create_queues(ref, aq_dma, &cq, &sq);
     if (err != 0)
     {
         goto out;
@@ -166,7 +187,7 @@ int main(int argc, char** argv)
 
     if (write)
     {
-        err = write_zeros(ctrl, &cq, &sq, &ti);
+        //err = write_zeros(ctrl, &cq, &sq, &ti, &ci);
         if (err != 0)
         {
             goto out;
@@ -176,9 +197,8 @@ int main(int argc, char** argv)
     err = read_pages(ctrl, &cq, &sq, &ti);
 
 out:
-    nvm_rpc_unbind(ref);
-    nvm_manager_unregister(mngr);
-    nvm_dma_window_free(aq_dma);
+    nvm_aq_destroy(ref);
+    nvm_dma_unmap(aq_dma);
     free(aq_mem);
     nvm_ctrl_free(ctrl);
     exit(err);
@@ -203,6 +223,37 @@ static void show_help(const char* name)
             "    --help                     Show this information.\n");
 }
 
+
+static int parse_u64(const char* str, uint64_t* num, int base)
+{
+    char* endptr = NULL;
+    uint64_t ul = strtoul(str, &endptr, base);
+
+    if (endptr == NULL || *endptr != '\0')
+    {
+        return EINVAL;
+    }
+
+    *num = ul;
+    return 0;
+}
+
+
+static int parse_u32(const char* str, uint32_t* num, int base)
+{
+    int status;
+    uint64_t ul;
+
+    status = parse_u64(str, &ul, base);
+
+    if (status != 0 || ul > UINT_MAX)
+    {
+        return EINVAL;
+    }
+
+    *num = (uint32_t) ul;
+    return status;
+}
 
 
 static void parse_args(int argc, char** argv, struct transfer_info* ti, uint64_t* ctrl_id, bool* write)
