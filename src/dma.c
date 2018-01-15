@@ -16,6 +16,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include "ctrl.h"
 #include "dma.h"
 #include "ioctl.h"
 #include "util.h"
@@ -370,11 +371,17 @@ static int populate_handle(struct dma* container, const nvm_ctrl_t* ctrl)
 /*
  * Create DMA mapping descriptor from virtual address using kernel module.
  */
-int nvm_dma_map_host(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, int fd, void* vaddr, size_t size)
+int nvm_dma_map_host(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, void* vaddr, size_t size)
 {
     struct ioctl_mapping* md;
 
     *handle = NULL;
+
+    int fd = _nvm_fd_from_ctrl(ctrl);
+    if (fd < 0)
+    {
+        return EBADF;
+    }
 
     int err = create_mapping(&md, _MAP_TYPE_HOST, fd, vaddr, size);
     if (err != 0)
@@ -405,11 +412,17 @@ int nvm_dma_map_host(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, int fd, void* v
 
 
 #ifdef _CUDA
-int nvm_dma_map_device(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, int fd, void* devptr, size_t size)
+int nvm_dma_map_device(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, void* devptr, size_t size)
 {
     struct ioctl_mapping* md;
 
     *handle = NULL;
+
+    int fd = _nvm_fd_from_ctrl(ctrl);
+    if (fd < 0)
+    {
+        return EBADF;
+    }
 
     int err = create_mapping(&md, _MAP_TYPE_CUDA, fd, devptr, size);
     if (err != 0)

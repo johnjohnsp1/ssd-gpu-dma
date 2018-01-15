@@ -76,9 +76,6 @@ set (benchmarks_root "${PROJECT_SOURCE_DIR}/benchmarks")
 
 # Samples shared files
 set (samples_root "${CMAKE_SOURCE_DIR}/examples")
-set (samples_common "${samples_root}/common")
-file (GLOB samples_common_all "${samples_common}/*.c")
-file (GLOB samples_common_sisci "${samples_common}/dis/*.c")
 
 
 
@@ -146,9 +143,6 @@ macro (make_sample target binary_name files)
     add_dependencies (${target} libnvm)
     target_link_libraries (${target} libnvm)
 
-    target_include_directories (${target} PRIVATE "${samples_common}")
-    target_sources (${target} PRIVATE ${samples_common_all})
-
     set_target_properties (${target} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/samples")
     set_target_properties (${target} PROPERTIES OUTPUT_NAME "${binary_name}")
 
@@ -162,7 +156,6 @@ endmacro ()
 macro (set_sisci target)
     if (NOT no_sisci_examples AND sisci_include AND sisci_lib)
         target_link_libraries (${target} ${sisci_lib})
-        target_sources (${target} PRIVATE ${samples_common_sisci})
         target_compile_definitions (${target} PRIVATE _REENTRANT __DIS_CLUSTER__)
     else ()
         list (REMOVE_ITEM sample_targets "${target}")

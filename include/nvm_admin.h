@@ -52,6 +52,7 @@ int nvm_admin_request_num_queues(nvm_aq_ref ref, uint16_t* n_cqs, uint16_t* n_sq
 
 /*
  * Create IO completion queue (CQ)
+ * Caller must set queue memory to zero manually.
  */
 int nvm_admin_cq_create(nvm_aq_ref ref,               // AQ pair reference
                         nvm_queue_t* cq,              // CQ descriptor
@@ -62,6 +63,7 @@ int nvm_admin_cq_create(nvm_aq_ref ref,               // AQ pair reference
 
 /*
  * Create IO submission queue (SQ)
+ * Caller must set queue memory to zero manually.
  */
 int nvm_admin_sq_create(nvm_aq_ref ref,               // AQ pair reference
                         nvm_queue_t* sq,              // SQ descriptor

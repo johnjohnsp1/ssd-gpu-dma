@@ -15,6 +15,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <stdio.h>
@@ -370,22 +371,29 @@ int nvm_dis_ctrl_init(nvm_ctrl_t** ctrl, uint64_t dev_id, uint32_t adapter)
 
 
 
-//int nvm_ctrl_init(nvm_ctrl_t** ctrl, const char* path)
-int nvm_ctrl_init(nvm_ctrl_t** ctrl, int fd)
+int nvm_ctrl_init(nvm_ctrl_t** ctrl, int filedes)
 {
     int err;
     
-    // TODO: dup(fd) instead
-//    int fd = open(path, O_RDWR|O_NONBLOCK);
-//    if (fd < 0)
-//    {
-//        dprintf("Could not find device resource file: %s\n", path);
-//        return ENODEV;
-//    }
+    int fd = dup(filedes);
+    if (fd < 0)
+    {
+        dprintf("Could not duplicate file descriptor: %s\n", strerror(errno));
+        return errno;
+    }
+
+    err = fcntl(fd, F_SETFD, O_RDWR|O_NONBLOCK);
+    if (err == -1)
+    {
+        close(fd);
+        dprintf("Failed to set file descriptor flags: %s\n", strerror(errno));
+        return errno;
+    }
 
     volatile void* ptr = mmap(NULL, NVM_CTRL_MEM_MINSIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_FILE, fd, 0);
     if (ptr == NULL)
     {
+        close(fd);
         dprintf("Failed to map device memory: %s\n", strerror(errno));
         return errno;
     }
@@ -394,6 +402,7 @@ int nvm_ctrl_init(nvm_ctrl_t** ctrl, int fd)
     if (container == NULL)
     {
         munmap((void*) ptr, NVM_CTRL_MEM_MINSIZE);
+        close(fd);
         return ENOMEM;
     }
 
@@ -404,8 +413,11 @@ int nvm_ctrl_init(nvm_ctrl_t** ctrl, int fd)
     {
         munmap((void*) ptr, NVM_CTRL_MEM_MINSIZE);
         free(container);
+        close(fd);
         return err;
     }
+
+    container->fd = fd;
 
     *ctrl = &container->handle;
     return 0;
@@ -427,7 +439,7 @@ void nvm_ctrl_free(nvm_ctrl_t* ctrl)
 
             case _DEVICE_TYPE_SYSFS:
                 munmap((void*) ctrl->mm_ptr, ctrl->mm_size);
-                //close(container->fd);
+                close(container->fd);
                 break;
 
 #if _SISCI

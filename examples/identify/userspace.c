@@ -15,7 +15,6 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include "util.h"
 
 
 /* 
@@ -29,6 +28,40 @@ struct bdf
     int     device;
     int     function;
 };
+
+
+static void print_ctrl_info(FILE* fp, const struct nvm_ctrl_info* info)
+{
+    unsigned char vendor[4];
+    memcpy(vendor, &info->pci_vendor, sizeof(vendor));
+
+    char serial[21];
+    memset(serial, 0, 21);
+    memcpy(serial, info->serial_no, 20);
+
+    char model[41];
+    memset(model, 0, 41);
+    memcpy(model, info->model_no, 40);
+
+    char revision[9];
+    memset(revision, 0, 9);
+    memcpy(revision, info->firmware, 8);
+
+    fprintf(fp, "------------- Controller information -------------\n");
+    fprintf(fp, "PCI Vendor ID           : %x %x\n", vendor[0], vendor[1]);
+    fprintf(fp, "PCI Subsystem Vendor ID : %x %x\n", vendor[2], vendor[3]);
+    fprintf(fp, "NVM Express version     : %u.%u.%u\n",
+            info->nvme_version >> 16, (info->nvme_version >> 8) & 0xff, info->nvme_version & 0xff);
+    fprintf(fp, "Controller page size    : %zu\n", info->page_size);
+    fprintf(fp, "Max queue entries       : %u\n", info->max_entries);
+    fprintf(fp, "Serial Number           : %s\n", serial);
+    fprintf(fp, "Model Number            : %s\n", model);
+    fprintf(fp, "Firmware revision       : %s\n", revision);
+    fprintf(fp, "Max data transfer size  : %zu\n", info->max_data_size);
+    fprintf(fp, "Max outstanding commands: %zu\n", info->max_out_cmds);
+    fprintf(fp, "Max number of namespaces: %zu\n", info->max_n_ns);
+    fprintf(fp, "--------------------------------------------------\n");
+}
 
 
 static int lookup_ioaddrs(void* ptr, size_t page_size, size_t n_pages, uint64_t* ioaddrs)

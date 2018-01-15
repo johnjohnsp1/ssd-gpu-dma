@@ -14,7 +14,7 @@ struct device;
  * Returns a valid file descriptor (positive integer) or -EBADF if the 
  * controller memory is not mapped through this library.
  */
-//int _nvm_fd_from_ctrl(const nvm_ctrl_t* ctrl);
+int _nvm_fd_from_ctrl(const nvm_ctrl_t* ctrl);
 
 
 

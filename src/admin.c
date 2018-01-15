@@ -73,12 +73,19 @@ void _nvm_admin_identify_ns(nvm_cmd_t* cmd, uint32_t ns_id, uint64_t ioaddr)
 
 int nvm_admin_ctrl_info(nvm_aq_ref ref, struct nvm_ctrl_info* info, void* ptr, uint64_t ioaddr)
 {
-    if (info == NULL)
+    nvm_cmd_t command;
+    nvm_cpl_t completion;
+
+    if (info == NULL || ptr == NULL || ioaddr == 0)
     {
-        return EINVAL;
+        return NVM_ERR_PACK(NULL, EINVAL);
     }
 
+    memset(&command, 0, sizeof(command));
+    memset(&completion, 0, sizeof(completion));
     memset(info, 0, sizeof(struct nvm_ctrl_info));
+    memset(ptr, 0, 0x1000);
+
     const nvm_ctrl_t* ctrl = _nvm_ctrl_from_aq_ref(ref);
 
     info->nvme_version = (uint32_t) *VER(ctrl->mm_ptr);
@@ -88,29 +95,16 @@ int nvm_admin_ctrl_info(nvm_aq_ref ref, struct nvm_ctrl_info* info, void* ptr, u
     info->contiguous = !!CAP$CQR(ctrl->mm_ptr);
     info->max_entries = ctrl->max_entries;
 
-    if (ptr == NULL || ioaddr == 0)
-    {
-        return 0;
-    }
+    _nvm_admin_identify_ctrl(&command, ioaddr);
 
-    memset(ptr, 0, 0x1000);
-
-    nvm_cmd_t cmd;
-    memset(&cmd, 0, sizeof(cmd));
-    _nvm_admin_identify_ctrl(&cmd, ioaddr);
-
-    nvm_cpl_t cpl;
-    memset(&cpl, 0, sizeof(cpl));
-
-    int err = nvm_raw_rpc(ref, &cmd, &cpl);
-    
+    int err = nvm_raw_rpc(ref, &command, &completion);
     if (!nvm_ok(err))
     {
         dprintf("Identify controller failed: %s\n", nvm_strerror(err));
         return err;
     }
 
-    const unsigned char* bytes = ((const unsigned char*) ptr);
+    const unsigned char* bytes = (const unsigned char*) ptr;
     memcpy(info->pci_vendor, bytes, 4);
     memcpy(info->serial_no, bytes + 4, 20);
     memcpy(info->model_no, bytes + 24, 40);
@@ -122,6 +116,164 @@ int nvm_admin_ctrl_info(nvm_aq_ref ref, struct nvm_ctrl_info* info, void* ptr, u
     info->max_out_cmds = *((uint16_t*) (bytes + 514));
     info->max_n_ns = *((uint32_t*) (bytes + 516));
 
-    return 0;
+    return NVM_ERR_PACK(NULL, 0);
+}
+
+
+
+int nvm_admin_ns_info(nvm_aq_ref ref, struct nvm_ns_info* info, uint32_t ns_id, void* ptr, uint64_t ioaddr)
+{
+    nvm_cmd_t command;
+    nvm_cpl_t completion;
+
+    if (info == NULL || ptr == NULL || ioaddr == 0)
+    {
+        return NVM_ERR_PACK(NULL, EINVAL);
+    }
+
+    memset(&command, 0, sizeof(command));
+    memset(&completion, 0, sizeof(completion));
+    memset(ptr, 0, 0x1000);
+    memset(info, 0, sizeof(struct nvm_ns_info));
+
+    info->ns_id = ns_id;
+
+    _nvm_admin_identify_ns(&command, ns_id, ioaddr);
+
+    int err = nvm_raw_rpc(ref, &command, &completion);
+    if (!nvm_ok(err))
+    {
+        dprintf("Identify namespace failed: %s\n", nvm_strerror(err));
+        return err;
+    }
+    
+    const unsigned char* bytes = (const unsigned char*) ptr;
+    info->size = *((uint64_t*) ptr);
+    info->capacity = *((uint64_t*) (ptr + 8));
+    info->utilization = *((uint64_t*) (ptr + 16));
+
+    uint8_t format_idx = _RB(bytes[26], 3, 0);
+
+    uint32_t lba_format = *((uint32_t*) (bytes + 128 + sizeof(uint32_t) * format_idx));
+    info->lba_data_size = 1 << _RB(lba_format, 23, 16);
+    info->metadata_size = _RB(lba_format, 15, 0);
+
+    return NVM_ERR_PACK(NULL, 0);
+}
+
+
+
+int nvm_admin_cq_create(nvm_aq_ref ref, nvm_queue_t* cq, uint16_t id, void* vaddr, uint64_t ioaddr)
+{
+    nvm_cmd_t command;
+    nvm_cpl_t completion;
+    nvm_queue_t queue;
+
+    const nvm_ctrl_t* ctrl = _nvm_ctrl_from_aq_ref(ref);
+
+    nvm_queue_clear(&queue, ctrl, true, id, vaddr, ioaddr);
+
+    memset(&command, 0, sizeof(command));
+    memset(&completion, 0, sizeof(completion));
+    _nvm_admin_cq_create(&command, &queue);
+
+    int err = nvm_raw_rpc(ref, &command, &completion);
+    if (!nvm_ok(err))
+    {
+        dprintf("Creating completion queue failed: %s\n", nvm_strerror(err));
+        return err;
+    }
+
+    *cq = queue;
+    return NVM_ERR_PACK(NULL, 0);
+}
+
+
+
+int nvm_admin_sq_create(nvm_aq_ref ref, nvm_queue_t* sq, const nvm_queue_t* cq, uint16_t id, void* vaddr, uint64_t ioaddr)
+{
+    nvm_cmd_t command;
+    nvm_cpl_t completion;
+    nvm_queue_t queue;
+
+    const nvm_ctrl_t* ctrl = _nvm_ctrl_from_aq_ref(ref);
+
+    nvm_queue_clear(&queue, ctrl, false, id, vaddr, ioaddr);
+
+    memset(&command, 0, sizeof(command));
+    memset(&completion, 0, sizeof(completion));
+    _nvm_admin_sq_create(&command, &queue, cq);
+
+    int err = nvm_raw_rpc(ref, &command, &completion);
+    if (!nvm_ok(err))
+    {
+        dprintf("Creating submission queue failed: %s\n", nvm_strerror(err));
+        return err;
+    }
+
+    *sq = queue;
+    return NVM_ERR_PACK(NULL, 0);
+}
+
+
+
+int nvm_admin_get_num_queues(nvm_aq_ref ref, uint16_t* n_cqs, uint16_t* n_sqs)
+{
+    nvm_cmd_t command;
+    nvm_cpl_t completion;
+
+    memset(&command, 0, sizeof(command));
+    memset(&completion, 0, sizeof(completion));
+
+    _nvm_admin_current_num_queues(&command, false, 0, 0);
+
+    int err = nvm_raw_rpc(ref, &command, &completion);
+    if (!nvm_ok(err))
+    {
+        dprintf("Failed to get current number of queues: %s\n", nvm_strerror(err));
+        return err;
+    }
+
+    *n_sqs = (completion.dword[0] >> 16) + 1;
+    *n_cqs = (completion.dword[0] & 0xffff) + 1;
+
+    return NVM_ERR_PACK(NULL, 0);
+}
+
+
+
+int nvm_admin_set_num_queues(nvm_aq_ref ref, uint16_t n_cqs, uint16_t n_sqs)
+{
+    return nvm_admin_request_num_queues(ref, &n_cqs, &n_sqs);
+}
+
+
+
+int nvm_admin_request_num_queues(nvm_aq_ref ref, uint16_t* n_cqs, uint16_t* n_sqs)
+{
+    nvm_cmd_t command;
+    nvm_cpl_t completion;
+
+    if (*n_cqs == 0 || *n_sqs == 0)
+    {
+        return NVM_ERR_PACK(NULL, EINVAL);
+    }
+
+    memset(&command, 0, sizeof(command));
+    memset(&completion, 0, sizeof(completion));
+
+    _nvm_admin_current_num_queues(&command, true, *n_cqs, *n_sqs);
+
+    int err = nvm_raw_rpc(ref, &command, &completion);
+    if (err != 0)
+    {
+        dprintf("Failed to set current number of queues: %s\n", nvm_strerror(err));
+        return err;
+    }
+
+    *n_sqs = (completion.dword[0] >> 16) + 1;
+    *n_cqs = (completion.dword[0] & 0xffff) + 1;
+
+    return NVM_ERR_PACK(NULL, 0);
 }
 

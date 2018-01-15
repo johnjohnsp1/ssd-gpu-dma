@@ -1,8 +1,9 @@
 #include <nvm_types.h>
 #include <nvm_ctrl.h>
 #include <nvm_dma.h>
-#include <nvm_manager.h>
-#include <nvm_rpc.h>
+#include <nvm_aq.h>
+#include <nvm_admin.h>
+#include <nvm_util.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -14,36 +15,60 @@
 #include <getopt.h>
 #include <string.h>
 #include <errno.h>
-#include "util.h"
 
 
 static void parse_args(int argc, char** argv, uint64_t* device_id);
 
 
-static int execute_identify(nvm_ctrl_t ctrl, nvm_dma_t queues, void* ptr, uint64_t ioaddr)
+static void print_ctrl_info(FILE* fp, const struct nvm_ctrl_info* info)
+{
+    unsigned char vendor[4];
+    memcpy(vendor, &info->pci_vendor, sizeof(vendor));
+
+    char serial[21];
+    memset(serial, 0, 21);
+    memcpy(serial, info->serial_no, 20);
+
+    char model[41];
+    memset(model, 0, 41);
+    memcpy(model, info->model_no, 40);
+
+    char revision[9];
+    memset(revision, 0, 9);
+    memcpy(revision, info->firmware, 8);
+
+    fprintf(fp, "------------- Controller information -------------\n");
+    fprintf(fp, "PCI Vendor ID           : %x %x\n", vendor[0], vendor[1]);
+    fprintf(fp, "PCI Subsystem Vendor ID : %x %x\n", vendor[2], vendor[3]);
+    fprintf(fp, "NVM Express version     : %u.%u.%u\n",
+            info->nvme_version >> 16, (info->nvme_version >> 8) & 0xff, info->nvme_version & 0xff);
+    fprintf(fp, "Controller page size    : %zu\n", info->page_size);
+    fprintf(fp, "Max queue entries       : %u\n", info->max_entries);
+    fprintf(fp, "Serial Number           : %s\n", serial);
+    fprintf(fp, "Model Number            : %s\n", model);
+    fprintf(fp, "Firmware revision       : %s\n", revision);
+    fprintf(fp, "Max data transfer size  : %zu\n", info->max_data_size);
+    fprintf(fp, "Max outstanding commands: %zu\n", info->max_out_cmds);
+    fprintf(fp, "Max number of namespaces: %zu\n", info->max_n_ns);
+    fprintf(fp, "--------------------------------------------------\n");
+}
+
+
+static int execute_identify(const nvm_ctrl_t* ctrl, const nvm_dma_t* window, void* ptr, uint64_t ioaddr)
 {
     int status;
-    nvm_manager_t mngr;
-    nvm_rpc_t rpc;
-    nvm_ctrl_info_t info;
+    nvm_aq_ref ref;
+    struct nvm_ctrl_info info;
 
     fprintf(stderr, "Resetting controller and setting up admin queues...\n");
-    status = nvm_manager_register(&mngr, ctrl, queues);
+    status = nvm_aq_create(&ref, ctrl, window);
     if (status != 0)
     {
         fprintf(stderr, "Failed to reset controller: %s\n", strerror(errno));
         return 1;
     }
 
-    status = nvm_rpc_bind_local(&rpc, mngr);
-    if (status != 0)
-    {
-        nvm_manager_unregister(mngr);
-        fprintf(stderr, "Failed to create RPC handle: %s\n", strerror(errno));
-        return 1;
-    }
-
-    status = nvm_rpc_ctrl_info(&info, rpc, ctrl, ptr, ioaddr);
+    status = nvm_admin_ctrl_info(ref, &info, ptr, ioaddr);
     if (status != 0)
     {
         fprintf(stderr, "Failed to identify controller: %s\n", strerror(errno));
@@ -54,17 +79,34 @@ static int execute_identify(nvm_ctrl_t ctrl, nvm_dma_t queues, void* ptr, uint64
     print_ctrl_info(stdout, &info);
 
 out:
-    nvm_rpc_unbind(rpc);
-    nvm_manager_unregister(mngr);
+    nvm_aq_destroy(ref);
     return status;
+}
+
+
+static int open_fd(uint64_t dev_id)
+{
+    int fd;
+    char path[64];
+
+    sprintf(path, "/dev/disnvme%lu", dev_id);
+
+    fd = open(path, O_RDWR|O_NONBLOCK);
+    if (fd < 0)
+    {
+        fprintf(stderr, "Failed to open descriptor: %s\n", strerror(errno));
+        return -1;
+    }
+
+    return fd;
 }
 
 
 int main(int argc, char** argv)
 {
     int status;
-    nvm_ctrl_t ctrl;
-    nvm_dma_t window;
+    nvm_ctrl_t* ctrl;
+    nvm_dma_t* window;
     void* memory;
 
     long page_size = sysconf(_SC_PAGESIZE);
@@ -72,12 +114,21 @@ int main(int argc, char** argv)
     uint64_t dev_id;
     parse_args(argc, argv, &dev_id);
 
-    status = nvm_ctrl_init(&ctrl, dev_id);
+    int fd = open_fd(dev_id);
+    if (fd < 0)
+    {
+        exit(1);
+    }
+
+    status = nvm_ctrl_init(&ctrl, fd);
     if (status != 0)
     {
+        close(fd);
         fprintf(stderr, "Failed to get controller reference: %s\n", strerror(status));
         exit(1);
     }
+
+    close(fd);
 
     status = posix_memalign(&memory, ctrl->page_size, 3 * page_size);
     if (status != 0)
@@ -87,7 +138,7 @@ int main(int argc, char** argv)
         exit(2);
     }
 
-    status = nvm_dma_window_host_map(&window, ctrl, memory, 3 * page_size);
+    status = nvm_dma_map_host(&window, ctrl, memory, 3 * page_size);
     if (status != 0)
     {
         free(memory);
@@ -95,9 +146,10 @@ int main(int argc, char** argv)
         exit(1);
     }
 
-    status = execute_identify(ctrl, window, ((unsigned char*) memory) + 2 * page_size, window->ioaddrs[2]);
 
-    nvm_dma_window_free(window);
+    status = execute_identify(ctrl, window, NVM_DMA_OFFSET(window, 2), window->ioaddrs[2]);
+
+    nvm_dma_unmap(window);
     free(memory);
     nvm_ctrl_free(ctrl);    
 
@@ -120,6 +172,20 @@ static void show_help(const char* name)
             "    --help                     Show this information.\n");
 }
 
+
+static int parse_u64(const char* str, uint64_t* num, int base)
+{
+    char* endptr = NULL;
+    uint64_t ul = strtoul(str, &endptr, base);
+
+    if (endptr == NULL || *endptr != '\0')
+    {
+        return EINVAL;
+    }
+
+    *num = ul;
+    return 0;
+}
 
 
 static void parse_args(int argc, char** argv, uint64_t* dev)

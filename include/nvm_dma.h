@@ -57,7 +57,7 @@ void nvm_dma_unmap(nvm_dma_t* map);
  *
  * Note: vaddr can not be NULL, and must be aligned to system page size.
  */
-int nvm_dma_map_host(nvm_dma_t** map, const nvm_ctrl_t* ctrl, int fd, void* vaddr, size_t size);
+int nvm_dma_map_host(nvm_dma_t** map, const nvm_ctrl_t* ctrl, void* vaddr, size_t size);
 
 
 
@@ -73,7 +73,7 @@ int nvm_dma_map_host(nvm_dma_t** map, const nvm_ctrl_t* ctrl, int fd, void* vadd
  *
  * Note: vaddr can not be NULL, and must be aligned to GPU page size.
  */
-int nvm_dma_map_device(nvm_dma_t** map, const nvm_ctrl_t* ctrl, int fd, void* devptr, size_t size);
+int nvm_dma_map_device(nvm_dma_t** map, const nvm_ctrl_t* ctrl, void* devptr, size_t size);
 
 #endif /* __CUDA__ */
 
