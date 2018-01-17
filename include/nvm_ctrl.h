@@ -85,6 +85,13 @@ int nvm_dis_ctrl_init(nvm_ctrl_t** ctrl, uint64_t smartio_dev_id, uint32_t dis_a
 
 
 
+/*
+ * Get controller associated with admin queue-pair reference.
+ */
+const nvm_ctrl_t* nvm_ctrl_from_aq_ref(nvm_aq_ref ref);
+
+
+
 #ifdef __cplusplus
 }
 #endif

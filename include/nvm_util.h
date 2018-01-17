@@ -34,12 +34,34 @@ uint64_t _nvm_bitmask(int hi, int lo)
     ((volatile uint##bits##_t *) (((volatile unsigned char*) ((volatile void*) (p))) + (offs)))
 
 
+/*
+ * Calculate block number from page number.
+ */
+#define NVM_PAGE_TO_BLOCK(page_size, block_size, pageno)    \
+    (((page_size) * (pageno)) / (block_size))
+    
+
+
+/*
+ * Calculate page number from block number.
+ */
+#define NVM_BLOCK_TO_PAGE(page_size, block_size, blockno)   \
+    (((block_size) * (blockno)) / (page_size))
+
 
 /*
  * Create mask to clear away address offset.
  */
 #define NVM_PAGE_MASK(page_size)                    \
     ~((page_size) - 1)
+
+
+/*
+ * Round address down to nearest page alignment.
+ */
+#define NVM_ADDR_MASK(addr, page_size)              \
+    (((uint64_t) (addr)) & NVM_PAGE_MASK((page_size)))
+
 
 
 /*
@@ -61,7 +83,7 @@ uint64_t _nvm_bitmask(int hi, int lo)
  */
 #define NVM_PTR_OFFSET(ptr, page_size, pageno)      \
     ((void*) (((unsigned char*) (ptr)) + ((page_size) * (pageno))))
-    
+
 
 /*
  * Align size to controller pages.
@@ -70,19 +92,25 @@ uint64_t _nvm_bitmask(int hi, int lo)
     NVM_PAGE_ALIGN((size), (ctrl_ptr)->page_size)
 
 
+/*
+ * Convert size to number of controller pages.
+ */
+#define NVM_CTRL_PAGES(ctrl_ptr, size)              \
+    (NVM_CTRL_ALIGN((ctrl_ptr), (size)) / (ctrl_ptr)->page_size)
+
+
+/*
+ * Align size to page size.
+ */
+#define NVM_DMA_ALIGN(dma_ptr, size)                \
+    NVM_PAGE_ALIGN((size), (dma_ptr)->page_size)
+
 
 /*
  * Calculate controller page-aligned offset into DMA handle pointer.
  */
 #define NVM_DMA_OFFSET(dma_ptr, pageno)             \
     NVM_PTR_OFFSET((dma_ptr)->vaddr, (dma_ptr)->page_size, (pageno))
-
-
-/*
- * Convert size to number of controller pages.
- */
-#define NVM_CTRL_PAGES(ctrl_ptr, size)              \
-    (NVM_CTRL_ALIGN((ctrl_ptr), size) / (ctrl_ptr)->page_size)
 
 
 

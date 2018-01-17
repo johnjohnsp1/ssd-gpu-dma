@@ -36,7 +36,7 @@ typedef int (*rpc_stub_t)(void*, nvm_cmd_t*, nvm_cpl_t*);
 /*
  * Get internal controller reference from RPC reference.
  */
-const nvm_ctrl_t* _nvm_ctrl_from_aq_ref(const struct nvm_admin_reference*);
+//const nvm_ctrl_t* _nvm_ctrl_from_aq_ref(const struct nvm_admin_reference*);
 
 
 

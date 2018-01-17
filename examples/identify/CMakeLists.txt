@@ -1,5 +1,5 @@
 cmake_minimum_required (VERSION 3.1)
-project (libnvm)
+project (libnvm-samples)
 
 make_sample (userspace_identify userspace_identify "userspace.c")
 

@@ -8,6 +8,7 @@
 #endif
 
 #include <nvm_types.h>
+#include <nvm_ctrl.h>
 #include <nvm_aq.h>
 #include <nvm_rpc.h>
 #include <nvm_queue.h>
@@ -462,7 +463,14 @@ void nvm_aq_destroy(nvm_aq_ref ref)
 
 
 
-const nvm_ctrl_t* _nvm_ctrl_from_aq_ref(const struct nvm_admin_reference* ref)
+//const nvm_ctrl_t* _nvm_ctrl_from_aq_ref(const struct nvm_admin_reference* ref)
+//{
+//    return ref->ctrl;
+//}
+
+
+
+const nvm_ctrl_t* nvm_ctrl_from_aq_ref(nvm_aq_ref ref)
 {
     return ref->ctrl;
 }

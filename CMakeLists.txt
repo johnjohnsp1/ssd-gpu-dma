@@ -212,6 +212,7 @@ add_subdirectory ("${samples_root}/dis-rpc")
 add_subdirectory ("${samples_root}/dis-rw")
 add_subdirectory ("${samples_root}/module-read-example")
 add_subdirectory ("${samples_root}/identify")
+add_subdirectory ("${samples_root}/integrity")
 
 # Build all samples
 add_custom_target (samples DEPENDS ${sample_targets})

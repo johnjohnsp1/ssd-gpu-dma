@@ -9,6 +9,7 @@
 #include <nvm_types.h>
 #include <nvm_rpc.h>
 #include <nvm_aq.h>
+#include <nvm_ctrl.h> // FIXME: nvm_ctrl_from_aq_ref
 #include <nvm_util.h>
 #include <nvm_queue.h>
 #include <nvm_error.h>
@@ -215,7 +216,7 @@ static int create_binding_handle(struct binding_handle** handle, nvm_aq_ref ref,
 {
     *handle = NULL;
 
-    const nvm_ctrl_t* ctrl = _nvm_ctrl_from_aq_ref(ref);
+    const nvm_ctrl_t* ctrl = nvm_ctrl_from_aq_ref(ref);
     if (ctrl == NULL)
     {
         return EINVAL;

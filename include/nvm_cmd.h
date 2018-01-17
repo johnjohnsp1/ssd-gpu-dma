@@ -92,35 +92,28 @@ void nvm_cmd_rw_blks(nvm_cmd_t* cmd, uint64_t start_lba, uint16_t n_blks)
  * Build a PRP list consisting of PRP entries.
  *
  * Populate a memory page with PRP entries required for a transfer.
- * Returns the number of PRP entries used
+ * Returns the number of PRP entries used. Number of pages should 
+ * always be max_data_size (MDTS) for IO commands.
  *
  * Note: currently, only a PRP lists can only be a single page
  */
 __host__ __device__ static inline
-size_t nvm_prp_list_page(size_t data_size,
-                         size_t page_size,
-                         void* list_vaddr, 
-                         const uint64_t* data_ioaddrs)
+size_t nvm_prp_list(size_t page_size,
+                    size_t n_pages,
+                    void* list_vaddr, 
+                    const uint64_t* data_ioaddrs)
 {
     size_t prps_per_page = page_size / sizeof(uint64_t);
-    size_t n_prps;
     size_t i_prp;
     uint64_t* list_ptr;
-
-    if (data_size == 0)
+    
+    if (prps_per_page < n_pages)
     {
-        return 0;
+        n_pages = prps_per_page;
     }
-
-    n_prps = ((data_size + page_size - 1) & ~(page_size - 1)) / page_size;
-
-    if (prps_per_page < n_prps)
-    {
-        n_prps = prps_per_page;
-    }
-   
+    
     list_ptr = (uint64_t*) list_vaddr;
-    for (i_prp = 0; i_prp < n_prps; ++i_prp)
+    for (i_prp = 0; i_prp < n_pages; ++i_prp)
     {
         list_ptr[i_prp] = data_ioaddrs[i_prp];
     }

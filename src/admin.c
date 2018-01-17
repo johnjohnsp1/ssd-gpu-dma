@@ -4,6 +4,7 @@
 #include <nvm_rpc.h>
 #include <nvm_util.h>
 #include <nvm_error.h>
+#include <nvm_ctrl.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -86,7 +87,7 @@ int nvm_admin_ctrl_info(nvm_aq_ref ref, struct nvm_ctrl_info* info, void* ptr, u
     memset(info, 0, sizeof(struct nvm_ctrl_info));
     memset(ptr, 0, 0x1000);
 
-    const nvm_ctrl_t* ctrl = _nvm_ctrl_from_aq_ref(ref);
+    const nvm_ctrl_t* ctrl = nvm_ctrl_from_aq_ref(ref);
 
     info->nvme_version = (uint32_t) *VER(ctrl->mm_ptr);
     info->page_size = ctrl->page_size;
@@ -169,7 +170,7 @@ int nvm_admin_cq_create(nvm_aq_ref ref, nvm_queue_t* cq, uint16_t id, void* vadd
     nvm_cpl_t completion;
     nvm_queue_t queue;
 
-    const nvm_ctrl_t* ctrl = _nvm_ctrl_from_aq_ref(ref);
+    const nvm_ctrl_t* ctrl = nvm_ctrl_from_aq_ref(ref);
 
     nvm_queue_clear(&queue, ctrl, true, id, vaddr, ioaddr);
 
@@ -196,7 +197,7 @@ int nvm_admin_sq_create(nvm_aq_ref ref, nvm_queue_t* sq, const nvm_queue_t* cq, 
     nvm_cpl_t completion;
     nvm_queue_t queue;
 
-    const nvm_ctrl_t* ctrl = _nvm_ctrl_from_aq_ref(ref);
+    const nvm_ctrl_t* ctrl = nvm_ctrl_from_aq_ref(ref);
 
     nvm_queue_clear(&queue, ctrl, false, id, vaddr, ioaddr);
 

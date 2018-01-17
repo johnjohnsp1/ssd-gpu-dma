@@ -1,0 +1,187 @@
+#include <nvm_types.h>
+#include <nvm_ctrl.h>
+#include <nvm_dma.h>
+#include <nvm_admin.h>
+#include <nvm_error.h>
+#include <nvm_queue.h>
+#include <nvm_cmd.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <string.h>
+#include <errno.h>
+#include <pthread.h>
+#include "integrity.h"
+
+
+struct consumer
+{
+    pthread_t           thread;
+    struct queue*       queues;
+    uint16_t            n_queues;
+    bool                cancel;
+};
+
+
+struct producer
+{
+    pthread_t           thread;
+    bool                write;
+    struct buffer*      buffer;
+    uint16_t            queue_no;
+    struct queue*       queues;
+    const struct disk*  disk;
+    size_t              start_block;
+    size_t              n_blocks;
+};
+
+
+static struct consumer* consume_completions(struct consumer* c)
+{
+    nvm_cpl_t* cpl;
+    nvm_queue_t* cq = &c->queues[0].queue;
+    nvm_queue_t* sq = NULL;
+
+    while (!c->cancel)
+    {
+        cpl = nvm_cq_dequeue_block(cq, 100);
+
+        if (cpl != NULL)
+        {
+            sq = &c->queues[*NVM_CPL_SQID(cpl)].queue;
+            nvm_sq_update(sq);
+            nvm_cq_update(cq);
+            c->queues[0].counter++;
+        }
+    }
+
+    return c;
+}
+
+
+static struct producer* produce_commands(struct producer* p)
+{
+    nvm_cmd_t* cmd;
+    size_t block_size = p->disk->block_size;
+    size_t page_size = p->buffer->dma->page_size;
+
+    size_t n_pages = NVM_PAGE_ALIGN(p->n_blocks * block_size, page_size) / page_size;
+
+    size_t transfer_pages = p->disk->max_data_size / page_size;
+
+    size_t page_offset;
+    size_t n_blocks;
+
+    uint32_t ns_id = p->disk->ns_id;
+
+    nvm_dma_t* dma = p->buffer->dma;
+    struct queue* queue = &p->queues[p->queue_no];
+    nvm_dma_t* prp = queue->qmem.dma;
+
+    nvm_queue_t* sq = &queue->queue;
+
+    while (n_pages > 0)
+    {
+        if (n_pages < transfer_pages)
+        {
+            transfer_pages = n_pages;
+        }
+
+        while ((cmd = nvm_sq_enqueue(sq)) == NULL);
+
+        nvm_cmd_header(cmd, p->write ? NVM_IO_WRITE : NVM_IO_READ, ns_id);
+
+        n_blocks = NVM_PAGE_TO_BLOCK(page_size, block_size, transfer_pages);
+        nvm_cmd_rw_blks(cmd, p->start_block, n_blocks);
+
+        page_offset = NVM_BLOCK_TO_PAGE(page_size, block_size, p->start_block);
+
+        if (transfer_pages == 1)
+        {
+            nvm_cmd_data_ptr(cmd, dma->ioaddrs[page_offset], 0);
+        }
+        else if (transfer_pages == 2)
+        {
+            nvm_cmd_data_ptr(cmd, dma->ioaddrs[page_offset], dma->ioaddrs[page_offset+1]);
+        }
+        else
+        {
+            nvm_prp_list(page_size, transfer_pages - 1, NVM_DMA_OFFSET(prp, 1), &dma->ioaddrs[page_offset+1]);
+            nvm_cmd_data_ptr(cmd, dma->ioaddrs[page_offset], prp->ioaddrs[1]);
+        }
+
+        nvm_sq_submit(sq);
+
+        p->start_block += n_blocks;
+        n_pages -= transfer_pages;
+        queue->counter++;
+    }
+
+    return p;
+}
+
+
+
+int disk_write(const struct disk* d, struct buffer* buffer, struct queue* queues, uint16_t n_queues, FILE* fp, off_t size)
+{
+    fread(buffer->dma->vaddr, 1, size, fp);
+
+    size_t n_blocks = NVM_PAGE_ALIGN(size, d->block_size) / d->block_size;
+    size_t n_pages = NVM_PAGE_ALIGN(size, d->page_size) / d->page_size;
+
+    size_t pages_per_queue = n_pages / n_queues;
+    size_t blocks_per_page = NVM_PAGE_TO_BLOCK(d->page_size, d->block_size, 1);
+
+
+    struct producer* producers = calloc(n_queues, sizeof(struct producer));
+    if (producers == NULL)
+    {
+        fprintf(stderr, "Failed to allocate thread descriptors\n");
+        return -1;
+    }
+
+    struct consumer consumer;
+    consumer.queues = queues;
+    consumer.n_queues = n_queues;
+    consumer.cancel = false;
+
+    pthread_create(&consumer.thread, NULL, (void *(*)(void*)) consume_completions, &consumer);
+
+    for (uint16_t i = 0; i < n_queues; ++i)
+    {
+        producers[i].write = true;
+        producers[i].buffer = buffer;
+        producers[i].queue_no = i + 1;
+        producers[i].queues = queues;
+        producers[i].disk = d;
+        producers[i].start_block = NVM_PAGE_TO_BLOCK(d->page_size, d->block_size, pages_per_queue * i);
+        producers[i].n_blocks = NVM_PAGE_TO_BLOCK(d->page_size, d->block_size, pages_per_queue);
+
+        if (i == n_queues - 1)
+        {
+            producers[i].n_blocks = n_blocks - producers[i].start_block;
+        }
+
+        pthread_create(&producers[i].thread, NULL, (void *(*)(void*)) produce_commands, &producers[i]);
+        fprintf(stderr, "\tQueue #%u: %zu blocks from block %zu\n", i, producers[i].n_blocks, producers[i].start_block);
+    }
+
+    size_t commands = 0;
+    for (uint16_t i = 0; i < n_queues; ++i)
+    {
+        pthread_join(producers[i].thread, NULL);
+        commands += queues[i+1].counter;
+    }
+
+    while (queues[0].counter < commands);
+
+    consumer.cancel = true;
+    pthread_join(consumer.thread, NULL);
+    fprintf(stderr, "Total blocks: %zu\n", n_blocks);
+
+
+    free(producers);
+    return 0;
+}
