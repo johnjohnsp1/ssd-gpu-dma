@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <nvm_types.h>
 #include <nvm_ctrl.h>
 #include <nvm_dma.h>
@@ -37,6 +38,7 @@ struct producer
     size_t              n_blocks;
 };
 
+#include <unistd.h>
 
 static struct consumer* consume_completions(struct consumer* c)
 {
@@ -46,19 +48,33 @@ static struct consumer* consume_completions(struct consumer* c)
 
     while (!c->cancel)
     {
-        cpl = nvm_cq_dequeue_block(cq, 100);
+        cpl = nvm_cq_dequeue_block(cq, 10);
 
-        if (cpl != NULL)
+        if (cpl == NULL)
         {
-            sq = &c->queues[*NVM_CPL_SQID(cpl)].queue;
-            nvm_sq_update(sq);
-            nvm_cq_update(cq);
-            c->queues[0].counter++;
+            pthread_yield();
+            continue;
         }
+
+        fprintf(stderr, "%u\n", *NVM_CPL_CID(cpl));
+        sq = &c->queues[*NVM_CPL_SQID(cpl)].queue;
+        nvm_sq_update(sq);
+
+        if (!NVM_ERR_OK(cpl))
+        {
+            fprintf(stderr, "%s\n", nvm_strerror(NVM_ERR_STATUS(cpl)));
+        }
+
+
+        nvm_cq_update(cq);
+        c->queues[0].counter++;
     }
 
     return c;
 }
+
+
+#define MAX 40 // 100
 
 
 static struct producer* produce_commands(struct producer* p)
@@ -89,7 +105,14 @@ static struct producer* produce_commands(struct producer* p)
             transfer_pages = n_pages;
         }
 
-        while ((cmd = nvm_sq_enqueue(sq)) == NULL);
+        while ((cmd = nvm_sq_enqueue(sq)) == NULL)
+        {
+            fprintf(stderr, "sq->head=%u sq->tail=%u sq->last=%u\n", sq->head, sq->tail, sq->last);
+            nvm_sq_submit(sq);
+            pthread_yield();
+
+            usleep(200000);
+        }
 
         nvm_cmd_header(cmd, p->write ? NVM_IO_WRITE : NVM_IO_READ, ns_id);
 
@@ -101,10 +124,14 @@ static struct producer* produce_commands(struct producer* p)
         if (transfer_pages == 1)
         {
             nvm_cmd_data_ptr(cmd, dma->ioaddrs[page_offset], 0);
+            fprintf(stderr, "no\n");
+            exit(1);
         }
         else if (transfer_pages == 2)
         {
             nvm_cmd_data_ptr(cmd, dma->ioaddrs[page_offset], dma->ioaddrs[page_offset+1]);
+            fprintf(stderr, "no\n");
+            exit(1);
         }
         else
         {
@@ -112,28 +139,36 @@ static struct producer* produce_commands(struct producer* p)
             nvm_cmd_data_ptr(cmd, dma->ioaddrs[page_offset], prp->ioaddrs[1]);
         }
 
-        nvm_sq_submit(sq);
 
         p->start_block += n_blocks;
         n_pages -= transfer_pages;
         queue->counter++;
+
+        if (queue->counter == MAX) break;
     }
+
+    if (p->write)
+    {
+        while ((cmd = nvm_sq_enqueue(sq)) == NULL);
+        nvm_cmd_header(cmd, NVM_IO_FLUSH, ns_id);
+        nvm_cmd_data_ptr(cmd, 0, 0);
+        nvm_cmd_rw_blks(cmd, 0, 0);
+        queue->counter++;
+    }
+
+    nvm_sq_submit(sq);
 
     return p;
 }
 
 
 
-int disk_write(const struct disk* d, struct buffer* buffer, struct queue* queues, uint16_t n_queues, FILE* fp, off_t size)
+static int transfer(const struct disk* d, struct buffer* buffer, struct queue* queues, uint16_t n_queues, off_t size, bool write)
 {
-    fread(buffer->dma->vaddr, 1, size, fp);
-
     size_t n_blocks = NVM_PAGE_ALIGN(size, d->block_size) / d->block_size;
     size_t n_pages = NVM_PAGE_ALIGN(size, d->page_size) / d->page_size;
 
     size_t pages_per_queue = n_pages / n_queues;
-    size_t blocks_per_page = NVM_PAGE_TO_BLOCK(d->page_size, d->block_size, 1);
-
 
     struct producer* producers = calloc(n_queues, sizeof(struct producer));
     if (producers == NULL)
@@ -151,7 +186,7 @@ int disk_write(const struct disk* d, struct buffer* buffer, struct queue* queues
 
     for (uint16_t i = 0; i < n_queues; ++i)
     {
-        producers[i].write = true;
+        producers[i].write = write;
         producers[i].buffer = buffer;
         producers[i].queue_no = i + 1;
         producers[i].queues = queues;
@@ -185,3 +220,29 @@ int disk_write(const struct disk* d, struct buffer* buffer, struct queue* queues
     free(producers);
     return 0;
 }
+
+
+
+int disk_write(const struct disk* d, struct buffer* buffer, struct queue* queues, uint16_t n_queues, FILE* fp, off_t size)
+{
+    int status;
+    size = MAX * 128 * 1024;
+
+    fread(buffer->dma->vaddr, 1, size, fp);
+    status = transfer(d, buffer, queues, n_queues, size, true);
+    return status;
+}
+
+
+int disk_read(const struct disk* d, struct buffer* buffer, struct queue* queues, uint16_t n_queues, FILE* fp, off_t size)
+{
+    size = MAX * 128 * 1024;
+
+    int status = transfer(d, buffer, queues, n_queues, size, false);
+    if (status == 0)
+    {
+        fwrite(buffer->dma->vaddr, 1, size, fp);
+    }
+    return status;
+}
+

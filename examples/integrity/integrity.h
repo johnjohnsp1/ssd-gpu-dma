@@ -51,5 +51,7 @@ void remove_queue(struct queue* q);
 
 int disk_write(const struct disk* disk, struct buffer* buffer, struct queue* queues, uint16_t n_queues, FILE* fp, off_t size);
 
+int disk_read(const struct disk* disk, struct buffer* buffer, struct queue* queues, uint16_t n_queues, FILE* fp, off_t size);
+
 
 #endif

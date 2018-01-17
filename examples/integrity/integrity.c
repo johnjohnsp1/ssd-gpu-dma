@@ -265,6 +265,8 @@ static int request_queues(nvm_aq_ref ref, struct arguments* args, struct queue**
         return status;
     }
 
+    fprintf(stderr, "n_cqs=%u n_sqs=%u\n", n_cqs, n_sqs);
+
     args->n_queues = n_sqs < args->n_queues ? n_sqs : args->n_queues;
 
     // Allocate queue descriptors
@@ -390,6 +392,7 @@ int main(int argc, char** argv)
         exit(1);
     }
 
+
     // Extract controller and namespace information
     status = identify_controller(aq_ref, &args, &disk);
     if (status != 0)
@@ -419,11 +422,11 @@ int main(int argc, char** argv)
 
     if (args.read_bytes > 0)
     {
-//        status = disk_read(&desc, ref, args.n_queues, fp, file_size);
+        //status = disk_read(&disk, &buffer, queues, args.n_queues, fp, file_size);
     }
     else
     {
-        status = disk_write(&disk, &buffer, queues, args.n_queues, fp, file_size);
+        //status = disk_write(&disk, &buffer, queues, args.n_queues, fp, file_size);
     }
 
 out:
