@@ -171,6 +171,39 @@ static void parse_arguments(int argc, char** argv, struct arguments* args)
 }
 
 
+static void print_ctrl_info(FILE* fp, const struct nvm_ctrl_info* info)
+{
+    unsigned char vendor[4];
+    memcpy(vendor, &info->pci_vendor, sizeof(vendor));
+
+    char serial[21];
+    memset(serial, 0, 21);
+    memcpy(serial, info->serial_no, 20);
+
+    char model[41];
+    memset(model, 0, 41);
+    memcpy(model, info->model_no, 40);
+
+    char revision[9];
+    memset(revision, 0, 9);
+    memcpy(revision, info->firmware, 8);
+
+    fprintf(fp, "------------- Controller information -------------\n");
+    fprintf(fp, "PCI Vendor ID           : %x %x\n", vendor[0], vendor[1]);
+    fprintf(fp, "PCI Subsystem Vendor ID : %x %x\n", vendor[2], vendor[3]);
+    fprintf(fp, "NVM Express version     : %u.%u.%u\n",
+            info->nvme_version >> 16, (info->nvme_version >> 8) & 0xff, info->nvme_version & 0xff);
+    fprintf(fp, "Controller page size    : %zu\n", info->page_size);
+    fprintf(fp, "Max queue entries       : %u\n", info->max_entries);
+    fprintf(fp, "Serial Number           : %s\n", serial);
+    fprintf(fp, "Model Number            : %s\n", model);
+    fprintf(fp, "Firmware revision       : %s\n", revision);
+    fprintf(fp, "Max data transfer size  : %zu\n", info->max_data_size);
+    fprintf(fp, "Max outstanding commands: %zu\n", info->max_out_cmds);
+    fprintf(fp, "Max number of namespaces: %zu\n", info->max_n_ns);
+    fprintf(fp, "--------------------------------------------------\n");
+}
+
 
 static int identify_controller(nvm_aq_ref ref, const struct arguments* args, struct disk* disk)
 {
@@ -192,14 +225,15 @@ static int identify_controller(nvm_aq_ref ref, const struct arguments* args, str
     {
         fprintf(stderr, "Failed to identify controller: %s\n", nvm_strerror(status));
     }
+    nvm_dma_unmap(window);
 
     disk->page_size = info.page_size;
     disk->max_data_size = info.max_data_size;
 
-    nvm_dma_unmap(window);
+    print_ctrl_info(stderr, &info);
+
     return status;
 }
-
 
 
 static int identify_namespace(nvm_aq_ref ref, const struct arguments* args, struct disk* disk)
@@ -265,9 +299,11 @@ static int request_queues(nvm_aq_ref ref, struct arguments* args, struct queue**
         return status;
     }
 
-    fprintf(stderr, "n_cqs=%u n_sqs=%u\n", n_cqs, n_sqs);
-
-    args->n_queues = n_sqs < args->n_queues ? n_sqs : args->n_queues;
+    if (n_sqs < args->n_queues)
+    {
+        fprintf(stderr, "Requested too many queues, controller only supports %u queues\n", n_sqs);
+        return ENOMEM;
+    }
 
     // Allocate queue descriptors
     q = calloc(args->n_queues + 1, sizeof(struct queue));
@@ -331,6 +367,7 @@ int main(int argc, char** argv)
     if (args.read_bytes > 0)
     {
         file_size = args.read_bytes;
+        fprintf(stderr, "Reading from disk and dumping to file `%s' (%lu bytes)\n", args.filename, file_size);
     }
     else
     {
@@ -344,9 +381,10 @@ int main(int argc, char** argv)
             fclose(fp);
             exit(2);
         }
+
+        fprintf(stderr, "Reading from file `%s' and writing to disk (%lu bytes)\n", args.filename, file_size);
     }
 
-    fprintf(stderr, "Using file `%s' (%lu bytes)\n", args.filename, file_size);
 
     // Start SISCI API
     SCIInitialize(0, &err);
@@ -422,11 +460,11 @@ int main(int argc, char** argv)
 
     if (args.read_bytes > 0)
     {
-        //status = disk_read(&disk, &buffer, queues, args.n_queues, fp, file_size);
+        status = disk_read(&disk, &buffer, queues, args.n_queues, fp, file_size);
     }
     else
     {
-        //status = disk_write(&disk, &buffer, queues, args.n_queues, fp, file_size);
+        status = disk_write(&disk, &buffer, queues, args.n_queues, fp, file_size);
     }
 
 out:

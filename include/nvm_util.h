@@ -1,11 +1,12 @@
 #ifndef __NVM_UTIL_H__
 #define __NVM_UTIL_H__
 
+#include <nvm_types.h>
 #include <stdint.h>
 
 
 /* Convenience function for creating a bit mask */
-static inline 
+static inline
 uint64_t _nvm_bitmask(int hi, int lo)
 {
     uint64_t mask = 0;
@@ -127,7 +128,17 @@ uint64_t _nvm_bitmask(int hi, int lo)
 #define NVM_CPL_STATUS(p)           _REG(p, 14, 16)
 
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+/*
+ * Get controller associated with admin queue-pair reference.
+ */
+const nvm_ctrl_t* nvm_ctrl_from_aq_ref(nvm_aq_ref ref);
 #ifdef __cplusplus
 }
 #endif
-#endif
+
+
+#endif /* __NVM_UTIL_H__ */

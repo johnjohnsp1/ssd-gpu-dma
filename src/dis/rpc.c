@@ -9,7 +9,6 @@
 #include <nvm_types.h>
 #include <nvm_rpc.h>
 #include <nvm_aq.h>
-#include <nvm_ctrl.h> // FIXME: nvm_ctrl_from_aq_ref
 #include <nvm_util.h>
 #include <nvm_queue.h>
 #include <nvm_error.h>

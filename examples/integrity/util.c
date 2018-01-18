@@ -46,7 +46,14 @@ int create_queue(struct queue* q, nvm_aq_ref ref, const struct queue* cq, uint16
 
     const nvm_ctrl_t* ctrl = nvm_ctrl_from_aq_ref(ref);
 
-    status = create_buffer(&q->qmem, ref, 2 * ctrl->page_size, adapter, id);
+    size_t prp_lists = 0;
+    if (cq != NULL)
+    {
+        size_t n_entries = ctrl->page_size / sizeof(nvm_cmd_t);
+        prp_lists = n_entries <= ctrl->max_entries ? n_entries : ctrl->max_entries;
+    }
+
+    status = create_buffer(&q->qmem, ref, prp_lists * ctrl->page_size + ctrl->page_size, adapter, id);
     if (!nvm_ok(status))
     {
         return status;

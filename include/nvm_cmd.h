@@ -98,28 +98,66 @@ void nvm_cmd_rw_blks(nvm_cmd_t* cmd, uint64_t start_lba, uint16_t n_blks)
  * Note: currently, only a PRP lists can only be a single page
  */
 __host__ __device__ static inline
-size_t nvm_prp_list(size_t page_size,
-                    size_t n_pages,
-                    void* list_vaddr, 
-                    const uint64_t* data_ioaddrs)
+size_t nvm_prp_list(size_t page_size, size_t n_pages, void* list_ptr, const uint64_t* data_ioaddrs)
 {
     size_t prps_per_page = page_size / sizeof(uint64_t);
     size_t i_prp;
-    uint64_t* list_ptr;
+    uint64_t* list;
     
     if (prps_per_page < n_pages)
     {
         n_pages = prps_per_page;
     }
     
-    list_ptr = (uint64_t*) list_vaddr;
+    list = (uint64_t*) list_ptr;
     for (i_prp = 0; i_prp < n_pages; ++i_prp)
     {
-        list_ptr[i_prp] = data_ioaddrs[i_prp];
+        list[i_prp] = data_ioaddrs[i_prp];
     }
 
     return i_prp;
 }
+
+
+
+/*
+ * Helper function to build a PRP list and set a command's data pointer fields.
+ */
+__host__ __device__ static inline
+size_t nvm_cmd_data(nvm_cmd_t* cmd, 
+                    size_t page_size, 
+                    size_t n_pages, 
+                    void* list_ptr, 
+                    uint64_t list_ioaddr, 
+                    const uint64_t* data_ioaddrs)
+{
+    size_t prp = 0;
+    uint64_t dptr0 = 0;
+    uint64_t dptr1 = 0;
+
+#ifndef NDEBUG
+    if (n_pages == 0)
+    {
+        return 0;
+    }
+#endif
+
+    dptr0 = data_ioaddrs[prp++];
+    
+    if (n_pages == 2)
+    {
+        dptr1 = data_ioaddrs[prp++];
+    }
+    else
+    {
+        dptr1 = list_ioaddr;
+        prp += nvm_prp_list(page_size, n_pages - 1, list_ptr, &data_ioaddrs[prp]);
+    }
+
+    nvm_cmd_data_ptr(cmd, dptr0, dptr1);
+    return prp;
+}
+
 
 
 #ifndef __CUDACC__
