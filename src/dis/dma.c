@@ -221,6 +221,34 @@ int nvm_dis_dma_map_remote(nvm_dma_t** handle,
 
 
 /*
+ * Helper function to connect to a remote segment.
+ */
+static int connect_remote_segment(struct device_memory** seg, const struct device* dev, uint32_t adapter, uint32_t segno, bool shared)
+{
+    int status = 0;
+    *seg = NULL;
+
+    struct device_memory* s = (struct device_memory*) malloc(sizeof(struct device_memory));
+    if (s == NULL)
+    {
+        dprintf("Failed to allocate segment descriptor: %s\n", strerror(errno));
+        return ENOMEM;
+    }
+
+    status = _nvm_device_memory_get(s, dev, adapter, segno, shared ? SCI_FLAG_SHARED : SCI_FLAG_PRIVATE);
+    if (status != 0)
+    {
+        free(s);
+        return status;
+    }
+
+    *seg = s;
+    return 0;
+}
+
+
+
+/*
  * Helper function to allocate a local segment descriptor.
  */
 static int create_local_segment(struct local_memory** seg, uint32_t id, size_t size, void* dptr)
@@ -297,6 +325,7 @@ int nvm_dis_dma_create(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, uint32_t adap
     }
 
     // Create local segment
+    // FIXME: When support is added in SISCI for SCI_FLAG_PRIVATE, remove id argument
     err = create_local_segment((struct local_memory**) &md->segment, id, size, NULL);
     if (err != 0)
     {
@@ -338,6 +367,7 @@ int nvm_dis_dma_create(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, uint32_t adap
 
 
 
+#ifdef _CUDA
 /*
  * Map CUDA device memory for device.
  */
@@ -393,14 +423,89 @@ int nvm_dis_dma_map_device(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, uint32_t 
 
     return 0;
 }
+#endif
+
+
+
+/*
+ * Helper function to unmap and remove local segment.
+ */
+static void disconnect_remote_segment(struct map_descriptor* md)
+{
+    if (md != NULL)
+    {
+        if (md->segment != NULL)
+        {
+            struct device_memory* segment = (struct device_memory*) md->segment;
+
+            _nvm_va_unmap(&md->va_mapping);
+            _nvm_io_unmap(&md->io_mapping);
+            _nvm_device_memory_put(segment);
+            free(segment);
+        }
+
+        _nvm_device_put(&md->device);
+        free(md);
+    }
+}
 
 
 
 /*
  * Connect to device memory.
  */
-int nvm_dis_dma_connect(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, uint32_t segno, size_t size, bool shared)
+int nvm_dis_dma_connect(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, uint32_t adapter, uint32_t segno, size_t size, bool shared)
 {
-    return ENOTSUP;
+    struct map_descriptor* md;
+    *handle = NULL;
+    size = NVM_CTRL_ALIGN(ctrl, size);
+
+    // Create mapping descriptor
+    int err = create_map_descriptor(&md, ctrl, size);
+    if (err != 0)
+    {
+        return err;
+    }
+
+    const struct device* dev = _nvm_device_from_ctrl(ctrl);
+
+    // Create local segment
+    err = connect_remote_segment((struct device_memory**) &md->segment, dev, adapter, segno, shared);
+    if (err != 0)
+    {
+        remove_map_descriptor(md);
+        return err;
+    }
+
+    // Map segment for device
+    struct device_memory* sd = (struct device_memory*) md->segment;
+    err = _nvm_io_map_remote(&md->io_mapping, md->device.device, sd->segment);
+    if (err != 0)
+    {
+        disconnect_remote_segment(md);
+        return err;
+    }
+
+    // Map segment into virtual memory
+    err = _nvm_va_map_remote(&md->va_mapping, size, sd->segment, true, true);
+    if (err != 0)
+    {
+        disconnect_remote_segment(md);
+        return err;
+    }
+    md->dma_mapping.vaddr = (void*) md->va_mapping.vaddr;
+
+    // Create handle container
+    err = _nvm_dma_create(handle, ctrl, (struct dma_map*) md, (dma_map_free_t) disconnect_remote_segment);
+    if (err != 0)
+    {
+        disconnect_remote_segment(md);
+        return err;
+    }
+
+    // Initialize DMA handle
+    _nvm_dma_handle_populate(*handle, ctrl, (uint64_t*) &md->io_mapping.ioaddr);
+
+    return 0;
 }
 

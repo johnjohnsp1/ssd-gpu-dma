@@ -112,6 +112,7 @@ int nvm_admin_ctrl_info(nvm_aq_ref ref, struct nvm_ctrl_info* info, void* ptr, u
     memcpy(info->firmware, bytes + 64, 8);
 
     info->max_data_size = (1UL << bytes[77]) * (1UL << (12 + CAP$MPSMIN(ctrl->mm_ptr)));
+    info->max_data_pages = info->max_data_size / info->page_size;
     info->sq_entry_size = 1 << _RB(bytes[512], 3, 0);
     info->cq_entry_size = 1 << _RB(bytes[513], 3, 0);
     info->max_out_cmds = *((uint16_t*) (bytes + 514));
@@ -172,6 +173,11 @@ int nvm_admin_cq_create(nvm_aq_ref ref, nvm_queue_t* cq, uint16_t id, void* vadd
 
     const nvm_ctrl_t* ctrl = nvm_ctrl_from_aq_ref(ref);
 
+    if (id == 0)
+    {
+        return EINVAL;
+    }
+
     nvm_queue_clear(&queue, ctrl, true, id, vaddr, ioaddr);
 
     memset(&command, 0, sizeof(command));
@@ -198,6 +204,11 @@ int nvm_admin_sq_create(nvm_aq_ref ref, nvm_queue_t* sq, const nvm_queue_t* cq, 
     nvm_queue_t queue;
 
     const nvm_ctrl_t* ctrl = nvm_ctrl_from_aq_ref(ref);
+
+    if (id == 0)
+    {
+        return EINVAL;
+    }
 
     nvm_queue_clear(&queue, ctrl, false, id, vaddr, ioaddr);
 

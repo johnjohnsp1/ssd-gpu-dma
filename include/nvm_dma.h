@@ -154,6 +154,7 @@ int nvm_dis_dma_create(nvm_dma_t** map,
  */
 int nvm_dis_dma_connect(nvm_dma_t** map,
                         const nvm_ctrl_t* ctrl,
+                        uint32_t dis_adapter,
                         uint32_t segment_no,
                         size_t size,
                         bool shared);

@@ -205,7 +205,10 @@ int nvm_dma_map(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, void* vaddr, size_t 
  */
 void nvm_dma_unmap(nvm_dma_t* handle)
 {
-    _nvm_dma_remove(handle);
+    if (handle != NULL)
+    {
+        _nvm_dma_remove(handle);
+    }
 }
 
 

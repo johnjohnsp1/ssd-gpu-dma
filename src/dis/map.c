@@ -127,6 +127,7 @@ int _nvm_io_map_local(struct io_map* m, sci_device_t device, sci_local_segment_t
     m->adapter = adapter;
     m->ioaddr = 0;
 
+    // FIXME: Remove this call when Lars adds support for segments created with SCI_FLAG_PRIVATE
     SCISetSegmentAvailable(m->lsegment, m->adapter, 0, &err);
     switch (err)
     {

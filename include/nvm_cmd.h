@@ -81,10 +81,20 @@ void nvm_cmd_rw_blks(nvm_cmd_t* cmd, uint64_t start_lba, uint16_t n_blks)
 {
     cmd->dword[10] = start_lba;
     cmd->dword[11] = start_lba >> 32;
-    cmd->dword[12] = (n_blks - 1) & 0xffff;
-    //cmd->dword[14] = 0;
-    //cmd->dword[15] = 0;
+    cmd->dword[12] = (cmd->dword[12] & 0xffff0000) | ((n_blks - 1) & 0xffff);
 }
+
+
+
+/*
+ * Set command's dataset management (DSM) field (DWORD13)
+ */
+//__device__ __host__ static inline
+//void nvm_cmd_dataset(nvm_cmd_t* cmd, bool sequential, bool low_latency)
+//{
+//    cmd->dword[13] = 0; // not supported yet
+//}
+
 
 
 
@@ -143,17 +153,17 @@ size_t nvm_cmd_data(nvm_cmd_t* cmd,
 #endif
 
     dptr0 = data_ioaddrs[prp++];
-    
-    if (n_pages == 2)
-    {
-        dptr1 = data_ioaddrs[prp++];
-    }
-    else
+
+    if (n_pages > 2 && list_ptr != NULL)
     {
         dptr1 = list_ioaddr;
         prp += nvm_prp_list(page_size, n_pages - 1, list_ptr, &data_ioaddrs[prp]);
     }
-
+    else if (n_pages >= 2)
+    {
+        dptr1 = data_ioaddrs[prp++];
+    }
+    
     nvm_cmd_data_ptr(cmd, dptr0, dptr1);
     return prp;
 }

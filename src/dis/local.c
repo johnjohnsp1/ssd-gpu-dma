@@ -83,8 +83,10 @@ void _nvm_local_memory_put(struct local_memory* mem)
 int _nvm_local_memory_get(struct local_memory* mem, uint32_t id, size_t size)
 {
     int err;
-   
+
+    // FIXME: When support is added, remove id argument and pass SCI_FLAG_PRIVATE
     err = create_segment(mem, id, size, 0);
+    //err = create_segment(mem, id, size, SCI_FLAG_PRIVATE);
     if (err != 0)
     {
         return err;
@@ -100,6 +102,8 @@ int _nvm_local_memory_get_attached(struct local_memory* mem, uint32_t id, void* 
     sci_error_t err;
     int status;
 
+    // FIXME: When support is added, use SCI_FLAG_PRIVATE
+    //status = create_segment(mem, id, size, SCI_FLAG_EMPTY | SCI_FLAG_PRIVATE);
     status = create_segment(mem, id, size, SCI_FLAG_EMPTY);
     if (status != 0)
     {

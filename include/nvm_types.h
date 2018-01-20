@@ -131,6 +131,7 @@ struct nvm_ctrl_info
     char                    model_no[40];   // Model number (NB! not null terminated)
     char                    firmware[8];    // Firmware revision
     size_t                  max_data_size;  // Maximum data transfer size (MDTS)
+    size_t                  max_data_pages; // Maximum data transfer size (in controller pages)
     size_t                  cq_entry_size;  // CQ entry size (CQES)
     size_t                  sq_entry_size;  // SQ entry size (SQES)
     size_t                  max_out_cmds;   // Maximum outstanding commands (MAXCMD)

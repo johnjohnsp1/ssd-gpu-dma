@@ -12,7 +12,7 @@ find_package (CUDA 8.0)
 set (DIS "/opt/DIS" CACHE PATH "SISCI install location")
 set (NVIDIA "" CACHE PATH "Path to Nvidia driver source")
 
-set (no_sisci_examples false CACHE BOOL "Do not use SISCI for examples")
+set (no_sisci_samples false CACHE BOOL "Do not use SISCI for examples")
 set (no_sisci false CACHE BOOL "Do not use SISCI for library")
 set (no_module false CACHE BOOL "Do not build kernel module")
 set (no_nvidia_driver false CACHE BOOL "Build kernel module without NVIDIA support")
@@ -143,6 +143,7 @@ macro (make_sample target binary_name files)
     add_dependencies (${target} libnvm)
     target_link_libraries (${target} libnvm)
 
+    # TODO: we may want to put them in bin after all
     set_target_properties (${target} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/samples")
     set_target_properties (${target} PROPERTIES OUTPUT_NAME "${binary_name}")
 
@@ -154,7 +155,7 @@ endmacro ()
 
 # Macro for making a target depend on SISCI
 macro (set_sisci target)
-    if (NOT no_sisci_examples AND sisci_include AND sisci_lib)
+    if (NOT no_sisci_samples AND sisci_include AND sisci_lib)
         target_link_libraries (${target} ${sisci_lib})
         target_compile_definitions (${target} PRIVATE _REENTRANT __DIS_CLUSTER__)
     else ()
@@ -169,6 +170,20 @@ endmacro ()
 # Make target depend on pthreads
 macro (set_multithread target)
     target_link_libraries (${target} Threads::Threads)
+endmacro ()
+
+
+# Set preferred ordering for sample targets
+macro (make_sisci_choice ctarget sisci_target other_target)
+    if (NOT no_sisci_samples AND sisci_include AND sisci_lib)
+        add_custom_target (${ctarget} DEPENDS ${sisci_target})
+        list (REMOVE_ITEM sample_targets "${other_target}")
+        set (sample_targets "${sample_targets}" PARENT_SCOPE)
+    else ()
+        add_custom_target (${ctarget} DEPENDS ${other_target})
+        list (REMOVE_ITEM sample_targets "${sisci_target}")
+        set (sample_targets "${sample_targets}" PARENT_SCOPE)
+    endif ()
 endmacro ()
 
 
@@ -208,9 +223,8 @@ endmacro ()
 
 
 # Add individual samples
-add_subdirectory ("${samples_root}/dis-rpc")
-add_subdirectory ("${samples_root}/dis-rw")
-add_subdirectory ("${samples_root}/module-read-example")
+add_subdirectory ("${samples_root}/rpc")
+add_subdirectory ("${samples_root}/read-blocks")
 add_subdirectory ("${samples_root}/identify")
 add_subdirectory ("${samples_root}/integrity")
 
