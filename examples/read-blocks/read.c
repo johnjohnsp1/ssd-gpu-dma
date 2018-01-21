@@ -163,7 +163,7 @@ static void dump_memory(const nvm_dma_t* buffer, const struct options* args, siz
     while (byte < size)
     {
         fprintf(stdout, "%8lx: ", byte);
-        for (size_t n = byte + 0x40 + (args->ascii * 0x40); byte < n; ++byte)
+        for (size_t n = byte + (args->ascii ? 0x80 : 0x20); byte < n; ++byte)
         {
             uint8_t value = ptr[byte];
             if (args->ascii)
@@ -233,8 +233,8 @@ int read_and_dump(const struct disk_info* disk, struct queue_pair* qp, const nvm
 
     nvm_sq_submit(&qp->sq);
 
+    // Wait for completions
     while (qp->num_cpls < num_cmds);
-
     qp->stop = true;
     pthread_join(completer, NULL);
 
