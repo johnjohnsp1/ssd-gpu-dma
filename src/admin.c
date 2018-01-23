@@ -13,6 +13,7 @@
 #include "admin.h"
 #include "rpc.h"
 #include "regs.h"
+#include "util.h"
 #include "dprintf.h"
 
 

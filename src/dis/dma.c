@@ -114,7 +114,7 @@ int nvm_dis_dma_map_local(nvm_dma_t** handle,
                           bool map_va)
 {
     struct map_descriptor* md;
-    size = NVM_CTRL_ALIGN(ctrl, size);
+    size = NVM_PAGE_ALIGN(size, 1ULL << 16); // FIXME: This is a hack
     *handle = NULL;
 
     // Create mapping descriptor
@@ -400,15 +400,6 @@ int nvm_dis_dma_map_device(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, uint32_t 
         remove_local_segment(md);
         return err;
     }
-
-    // Map segment into virtual memory
-    err = _nvm_va_map_local(&md->va_mapping, size, sd->segment);
-    if (err != 0)
-    {
-        remove_local_segment(md);
-        return err;
-    }
-    md->dma_mapping.vaddr = (void*) md->va_mapping.vaddr;
 
     // Create handle container
     err = _nvm_dma_create(handle, ctrl, (struct dma_map*) md, (dma_map_free_t) remove_local_segment);

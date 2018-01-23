@@ -110,12 +110,12 @@ if (CUDA_FOUND AND NOT no_cuda)
 endif ()
 
 # Set name of library
-set_target_properties (libnvm PROPERTIES OUTPUT_NAME "${CMAKE_PROJECT_NAME}")
+#set_target_properties (libnvm PROPERTIES OUTPUT_NAME "${CMAKE_PROJECT_NAME}")
+set_target_properties (libnvm PROPERTIES OUTPUT_NAME "nvm")
 
 # Set install locations
 install (FILES ${libnvm_include} DESTINATION "include")
 install (TARGETS libnvm DESTINATION "lib")
-
 
 
 
@@ -143,9 +143,9 @@ macro (make_sample target binary_name files)
     add_dependencies (${target} libnvm)
     target_link_libraries (${target} libnvm)
 
-    # TODO: we may want to put them in bin after all
-    set_target_properties (${target} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/samples")
-    set_target_properties (${target} PROPERTIES OUTPUT_NAME "${binary_name}")
+    # TODO: Do we want to install samples or not?
+    #set_target_properties (${target} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/samples")
+    set_target_properties (${target} PROPERTIES OUTPUT_NAME "nvm-${binary_name}")
 
     list (APPEND sample_targets "${target}")
     set (sample_targets "${sample_targets}" PARENT_SCOPE)
@@ -193,10 +193,11 @@ endmacro ()
 macro (make_benchmark target binary_name files)
     if (CUDA_FOUND AND NOT no_cuda)
         cuda_add_executable (${target} ${files} OPTIONS ) # Ugly bugly
+        target_compile_definitions (${target} PRIVATE __CUDA__)
 
         add_dependencies (${target} libnvm)
         target_link_libraries (${target} libnvm)
-        set_target_properties (${target} PROPERTIES OUTPUT_NAME "${binary_name}")
+        set_target_properties (${target} PROPERTIES OUTPUT_NAME "nvm-${binary_name}")
 
         list (APPEND benchmark_targets "${target}")
         set (benchmark_targets "${benchmark_targets}" PARENT_SCOPE)
@@ -207,11 +208,12 @@ endmacro ()
 
 macro (make_sisci_benchmark target binary_name files)
     if (CUDA_FOUND AND sisci_include AND sisci_lib AND NOT (no_cuda OR no_sisci))
-        cuda_add_executable (${target} ${files} OPTIONS -gencode arch=compute_50,code=sm_50 -D__DIS_CLUSTER__ -D_REENTRANT)
+        cuda_add_executable (${target} ${files} OPTIONS -gencode arch=compute_50,code=sm_50 -D__CUDA__ -D__DIS_CLUSTER__ -D_REENTRANT)
+        target_compile_definitions(${target} PRIVATE __DIS_CLUSTER__ __CUDA__ _REENTRANT)
 
         add_dependencies (${target} libnvm)
         target_link_libraries (${target} libnvm ${sisci_lib})
-        set_target_properties (${target} PROPERTIES OUTPUT_NAME "${binary_name}")
+        set_target_properties (${target} PROPERTIES OUTPUT_NAME "nvm-${binary_name}")
 
         list (APPEND benchmark_targets "${target}")
         set (benchmark_targets "${benchmark_targets}" PARENT_SCOPE)
@@ -235,8 +237,9 @@ add_custom_target (examples DEPENDS samples)
 
 # Add individual benchmarks
 if (CUDA_FOUND)
-    add_subdirectory ("${benchmarks_root}/simple-rdma")
-    add_subdirectory ("${benchmarks_root}/dis-latency")
+    #add_subdirectory ("${benchmarks_root}/simple-rdma")
+    #add_subdirectory ("${benchmarks_root}/dis-latency")
+    add_subdirectory ("${benchmarks_root}/latency")
     add_custom_target (benchmarks DEPENDS ${benchmark_targets})
 endif ()
 

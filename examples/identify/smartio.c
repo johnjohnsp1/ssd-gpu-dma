@@ -31,7 +31,7 @@ struct cl_args
 /*
  * Print controller information.
  */
-static void print_ctrl_info(FILE* fp, const struct nvm_ctrl_info* info)
+static void print_ctrl_info(FILE* fp, const struct nvm_ctrl_info* info, uint16_t n_cqs, uint16_t n_sqs)
 {
     unsigned char vendor[4];
     memcpy(vendor, &info->pci_vendor, sizeof(vendor));
@@ -61,6 +61,8 @@ static void print_ctrl_info(FILE* fp, const struct nvm_ctrl_info* info)
     fprintf(fp, "Max data transfer size  : %zu\n", info->max_data_size);
     fprintf(fp, "Max outstanding commands: %zu\n", info->max_out_cmds);
     fprintf(fp, "Max number of namespaces: %zu\n", info->max_n_ns);
+    fprintf(fp, "Current number of CQs   : %u\n", n_cqs);
+    fprintf(fp, "Current number of SQs   : %u\n", n_sqs);
     fprintf(fp, "--------------------------------------------------\n");
 }
 
@@ -106,12 +108,16 @@ int main(int argc, char** argv)
         exit(status);
     }
 
+    uint16_t n_cqs = 0;
+    uint16_t n_sqs = 0;
+    status = nvm_admin_get_num_queues(aq, &n_cqs, &n_sqs);
+
     struct nvm_ctrl_info info;
     status = nvm_admin_ctrl_info(aq, &info, NVM_DMA_OFFSET(window, 2), window->ioaddrs[2]);
 
     if (status == 0)
     {
-        print_ctrl_info(stdout, &info);
+        print_ctrl_info(stdout, &info, n_cqs, n_sqs);
     }
 
     nvm_aq_destroy(aq);
