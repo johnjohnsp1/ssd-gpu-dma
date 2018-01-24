@@ -256,7 +256,7 @@ int main(int argc, char** argv)
 
 
 
-static Time sendWindow(QueuePtr& queue, TransferPtr& from, const TransferPtr& to, const BufferPtr& buffer, uint32_t ns)
+static Time sendWindow(QueuePtr& queue, TransferPtr& from, const TransferPtr& to, const BufferPtr& buffer, uint32_t ns, Barrier* barrier)
 {
     size_t numCommands = 0;
     size_t numBlocks = 0;
@@ -281,9 +281,13 @@ static Time sendWindow(QueuePtr& queue, TransferPtr& from, const TransferPtr& to
         numBlocks += t.numBlocks;
     }
 
+    // Sync with other threads
+    barrier->wait();
+
     // Get current time before submitting
     auto before = std::chrono::high_resolution_clock::now();
     nvm_sq_submit(&queue->sq);
+    std::this_thread::yield();
 
     // Wait for all completions
     for (size_t i = 0; i < numCommands; ++i)
@@ -323,9 +327,8 @@ static void measure(QueuePtr queue, const BufferPtr buffer, Times* times, const 
         {
             transferPtr = queue->transfers.cbegin();
         }
-        barrier->wait();
         
-        auto time = sendWindow(queue, transferPtr, transferEnd, buffer, settings.nvmNamespace);
+        auto time = sendWindow(queue, transferPtr, transferEnd, buffer, settings.nvmNamespace, barrier);
 
         times->push_back(time);
     }
