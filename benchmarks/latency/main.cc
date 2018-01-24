@@ -53,6 +53,9 @@ static size_t createQueues(const Controller& ctrl, Settings& settings, QueueList
 
     srand(settings.startBlock);
 
+    const size_t maxDataBlock = NVM_PAGE_TO_BLOCK(pageSize, blockSize, ctrl.info.max_data_pages);
+    const size_t maxBlock = ctrl.ns.size / blockSize;
+
     size_t dataPages = 0;
 
     for (uint16_t i = 0; i < ctrl.numQueues; ++i)
@@ -79,9 +82,19 @@ static size_t createQueues(const Controller& ctrl, Settings& settings, QueueList
                 }
                 break;
 
+            //case AccessPattern::RANDOM: // FIXME: This is random-sequential
+            //    dataPages += prepareRange(queue->transfers, ctrl, dataPages, rand() % maxBlock, settings.numBlocks, false);
+            //    break;
+
             case AccessPattern::RANDOM:
+                for (size_t i = 0; i < settings.numBlocks / maxDataBlock; ++i)
+                {
+                    dataPages += prepareRange(queue->transfers, ctrl, dataPages, rand() % maxBlock, maxDataBlock, false);
+                }
                 break;
         }
+
+        fprintf(stderr, "\tQueue #%02u: %zu commands\n", queue->no, queue->transfers.size());
 
         queues.push_back(queue);
     }
@@ -344,13 +357,13 @@ static void printStatistics(const QueuePtr& queue, const Times& times)
 
         blocks += t.blocks;
 
-        fprintf(stdout, "q%u\t%u\t%zu\t%.3f\n",
+        fprintf(stdout, "#%04x %8u %12zu %12.3f\n",
                 queue->no, t.commands, t.blocks, current);
     }
 
     avg /= times.size();
 
-    fprintf(stderr, "Queue #%u qd=%zu blocks=%zu count=%zu min=%.1f avg=%.1f max=%.1f\n", 
+    fprintf(stderr, "Queue #%02u qd=%zu blocks=%zu count=%zu min=%.1f avg=%.1f max=%.1f\n", 
             queue->no,  queue->depth, blocks, times.size(), min, avg, max);
 }
 
@@ -371,7 +384,6 @@ static void benchmark(const QueueList& queues, const BufferPtr& buffer, const Se
 
     fprintf(stderr, "Running benchmark...\n");
 
-    fprintf(stdout, "#q\tcmds\tblocks\tus\n");
     for (size_t i = 0; i < queues.size(); ++i)
     {
         threads[i].join();
