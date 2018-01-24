@@ -58,6 +58,8 @@ static size_t createQueues(const Controller& ctrl, Settings& settings, QueueList
 
     size_t dataPages = 0;
 
+    bool write = false;
+
     for (uint16_t i = 0; i < ctrl.numQueues; ++i)
     {
         auto queue = make_shared<Queue>(ctrl, settings.adapter, settings.segmentId++, i+1, settings.queueDepth);
@@ -66,19 +68,19 @@ static size_t createQueues(const Controller& ctrl, Settings& settings, QueueList
         switch (settings.pattern)
         {
             case AccessPattern::REPEAT:
-                dataPages += prepareRange(queue->transfers, ctrl, dataPages, settings.startBlock, settings.numBlocks, false);
+                dataPages += prepareRange(queue->transfers, ctrl, dataPages, settings.startBlock, settings.numBlocks, write);
                 break;
 
             case AccessPattern::SEQUENTIAL:
                 if (i == ctrl.numQueues - 1)
                 {
                     dataPages += prepareRange(queue->transfers, ctrl, pageOff,
-                            NVM_PAGE_TO_BLOCK(pageSize, blockSize, pageOff), settings.numBlocks - NVM_PAGE_TO_BLOCK(pageSize, blockSize, pageOff), false);
+                            NVM_PAGE_TO_BLOCK(pageSize, blockSize, pageOff), settings.numBlocks - NVM_PAGE_TO_BLOCK(pageSize, blockSize, pageOff), write);
                 }
                 else
                 {
                     dataPages += prepareRange(queue->transfers, ctrl, pageOff,
-                            NVM_PAGE_TO_BLOCK(pageSize, blockSize, pageOff), NVM_PAGE_TO_BLOCK(pageSize, blockSize, pagesPerQueue), false);
+                            NVM_PAGE_TO_BLOCK(pageSize, blockSize, pageOff), NVM_PAGE_TO_BLOCK(pageSize, blockSize, pagesPerQueue), write);
                 }
                 break;
 
@@ -89,7 +91,7 @@ static size_t createQueues(const Controller& ctrl, Settings& settings, QueueList
             case AccessPattern::RANDOM:
                 for (size_t i = 0; i < settings.numBlocks / maxDataBlock; ++i)
                 {
-                    dataPages += prepareRange(queue->transfers, ctrl, dataPages, rand() % maxBlock, maxDataBlock, false);
+                    dataPages += prepareRange(queue->transfers, ctrl, dataPages, rand() % maxBlock, maxDataBlock, write);
                 }
                 break;
         }
@@ -360,8 +362,10 @@ static void printStatistics(const QueuePtr& queue, const Times& times)
 
         blocks += t.blocks;
 
-        fprintf(stdout, "#%04x %8u %12zu %12.3f\n",
-                queue->no, t.commands, t.blocks, current);
+        double bw = (t.blocks * 512) / current;
+
+        fprintf(stdout, "#%04x %8u %12zu %12.3f %12.3f\n",
+                queue->no, t.commands, t.blocks, current, bw);
     }
 
     avg /= times.size();
