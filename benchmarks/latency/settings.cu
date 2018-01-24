@@ -173,7 +173,7 @@ void Settings::parseArguments(int argc, char** argv)
 
             case 'd':
                 queueDepth = (size_t) parseNumber(optarg);
-                if (queueDepth < 1 || queueDepth >= 64)
+                if (queueDepth < 1 || queueDepth > 64)
                 {
                     throw string("Invalid queue depth, must be in range 1-64");
                 }
@@ -201,6 +201,11 @@ void Settings::parseArguments(int argc, char** argv)
     if (numBlocks == 0)
     {
         throw string("No length is specified!");
+    }
+
+    if (pattern == AccessPattern::RANDOM && filename != nullptr)
+    {
+        throw string("Can not verify random access pattern");
     }
 }
 

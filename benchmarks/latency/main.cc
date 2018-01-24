@@ -31,11 +31,12 @@ typedef std::chrono::duration<double, std::micro> mtime;
 
 struct Time
 {
-    uint16_t    depth;
+    uint16_t    commands;
+    size_t      blocks;
     mtime       time;
     
-    Time(uint16_t depth, mtime time)
-        : depth(depth), time(time) {}
+    Time(uint16_t commands, size_t blocks, mtime time)
+        : commands(commands), blocks(blocks), time(time) {}
 };
 
 
@@ -245,6 +246,7 @@ int main(int argc, char** argv)
 static Time sendWindow(QueuePtr& queue, TransferPtr& from, const TransferPtr& to, const BufferPtr& buffer, uint32_t ns)
 {
     size_t numCommands = 0;
+    size_t numBlocks = 0;
 
     // Fill up to queue depth with commands
     for (numCommands = 0; numCommands < queue->depth && from != to; ++numCommands, ++from)
@@ -262,6 +264,8 @@ static Time sendWindow(QueuePtr& queue, TransferPtr& from, const TransferPtr& to
         nvm_cmd_header(cmd, t.write ? NVM_IO_WRITE : NVM_IO_READ, ns);
         nvm_cmd_rw_blks(cmd, t.startBlock, t.numBlocks);
         nvm_cmd_data(cmd, buffer->page_size, t.numPages, prpListPtr, prpListAddr, &buffer->ioaddrs[t.startPage]);
+
+        numBlocks += t.numBlocks;
     }
 
     // Get current time before submitting
@@ -290,18 +294,22 @@ static Time sendWindow(QueuePtr& queue, TransferPtr& from, const TransferPtr& to
     // Get current time after all commands completed
     auto after = std::chrono::high_resolution_clock::now();
 
-    return Time(numCommands, after - before);
+    return Time(numCommands, numBlocks, after - before);
 }
 
 
 
 static void measure(QueuePtr queue, const BufferPtr buffer, Times* times, const Settings& settings, Barrier* barrier)
 {
+    const TransferPtr transferEnd = queue->transfers.cend();
+    TransferPtr transferPtr = queue->transfers.cbegin();
+
     for (size_t i = 0; i < settings.repetitions; ++i)
     {
-        TransferPtr transferPtr = queue->transfers.cbegin();
-        const TransferPtr transferEnd = queue->transfers.cend();
-
+        if (transferPtr == transferEnd)
+        {
+            transferPtr = queue->transfers.cbegin();
+        }
         barrier->wait();
         
         auto time = sendWindow(queue, transferPtr, transferEnd, buffer, settings.nvmNamespace);
@@ -317,6 +325,7 @@ static void printStatistics(const QueuePtr& queue, const Times& times)
     double min = std::numeric_limits<double>::max();
     double max = std::numeric_limits<double>::min();
     double avg = 0;
+    size_t blocks = 0;
 
     for (const auto& t: times)
     {
@@ -332,15 +341,14 @@ static void printStatistics(const QueuePtr& queue, const Times& times)
         }
 
         avg += current;
+
+        blocks += t.blocks;
+
+        fprintf(stdout, "q%u\t%u\t%zu\t%.3f\n",
+                queue->no, t.commands, t.blocks, current);
     }
 
     avg /= times.size();
-
-    size_t blocks = 0;
-    for (const auto& t: queue->transfers)
-    {
-        blocks += t.numBlocks;
-    }
 
     fprintf(stderr, "Queue #%u qd=%zu blocks=%zu count=%zu min=%.1f avg=%.1f max=%.1f\n", 
             queue->no,  queue->depth, blocks, times.size(), min, avg, max);
@@ -363,6 +371,7 @@ static void benchmark(const QueueList& queues, const BufferPtr& buffer, const Se
 
     fprintf(stderr, "Running benchmark...\n");
 
+    fprintf(stdout, "#q\tcmds\tblocks\tus\n");
     for (size_t i = 0; i < queues.size(); ++i)
     {
         threads[i].join();
