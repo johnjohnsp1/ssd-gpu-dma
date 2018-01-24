@@ -19,8 +19,6 @@ struct Queue
     nvm_queue_t             sq;
     nvm_queue_t             cq;
     size_t                  depth;
-    size_t                  startPage;
-    size_t                  endPage;
     TransferList            warmups;
     TransferList            transfers;
 

@@ -42,125 +42,50 @@ struct Time
 typedef std::vector<Time> Times;
 
 
-static void transferRange(const Controller& ctrl, TransferList& list, size_t startBlock, size_t numBlocks, bool write)
-{
-    const size_t blockSize = ctrl.ns.lba_data_size;
-    const size_t pageSize = ctrl.info.page_size;
-    const size_t transferPages = ctrl.info.max_data_pages;
-    
-    size_t transferBlocks = NVM_PAGE_TO_BLOCK(pageSize, blockSize, transferPages);
-
-    while (numBlocks != 0)
-    {
-        transferBlocks = std::min(transferBlocks, numBlocks);
-
-        Transfer t;
-        t.write = write;
-        t.startBlock = startBlock;
-        t.numBlocks = transferBlocks;
-        t.pages = NVM_BLOCK_TO_PAGE(pageSize, blockSize, t.numBlocks);
-
-        list.push_back(t);
-
-        startBlock += transferBlocks;
-        numBlocks -= transferBlocks;
-    }
-}
-
-
-
-static void fillRandom(const Controller& ctrl, TransferList& list, size_t numBlocks, bool write)
-{
-    const size_t blockSize = ctrl.ns.lba_data_size;
-    const size_t pageSize = ctrl.ctrl->page_size;
-    size_t transferBlocks = NVM_PAGE_TO_BLOCK(pageSize, blockSize, ctrl.info.max_data_pages);
-
-    size_t startBlock = rand() % ctrl.ns.size;
-
-    while (numBlocks != 0)
-    {
-        transferBlocks = std::min(transferBlocks, numBlocks);
-
-        Transfer t;
-        t.write = write;
-        t.startBlock = startBlock;
-        t.numBlocks = transferBlocks;
-        t.pages = NVM_BLOCK_TO_PAGE(pageSize, blockSize, t.numBlocks);
-
-        list.push_back(t);
-
-        startBlock += transferBlocks;
-        numBlocks -= transferBlocks;
-    }
-}
-
-
-
 static size_t createQueues(const Controller& ctrl, Settings& settings, QueueList& queues)
 {
+    const size_t pageSize = ctrl.info.page_size;
     const size_t blockSize = ctrl.ns.lba_data_size;
-    const size_t pageSize = ctrl.ctrl->page_size;
 
-    size_t startBlock = settings.startBlock;
-    size_t numBlocks = settings.numBlocks;
-
-    const size_t numPages = NVM_PAGE_ALIGN(numBlocks * blockSize, pageSize) / pageSize;
-    const size_t pagesPerQueue = numPages / ctrl.numQueues;
-
-    size_t totalPages = 0;
+    const size_t transferPages = NVM_PAGE_ALIGN(settings.numBlocks * blockSize, pageSize) / pageSize;
+    const size_t pagesPerQueue = transferPages / ctrl.numQueues;
 
     srand(settings.startBlock);
+
+    size_t dataPages = 0;
 
     for (uint16_t i = 0; i < ctrl.numQueues; ++i)
     {
         auto queue = make_shared<Queue>(ctrl, settings.adapter, settings.segmentId++, i+1, settings.queueDepth);
+        size_t pageOff = pagesPerQueue * i;
 
         switch (settings.pattern)
         {
             case AccessPattern::REPEAT:
-                queue->startPage = totalPages;
-                queue->endPage = totalPages + numPages;
-                totalPages += numPages;
-
-                transferRange(ctrl, queue->transfers, startBlock, numBlocks, false);
-
-                fprintf(stderr, "\tQueue #%u starts at block %zu and ends at block %zu (page %zu)\n", 
-                        queue->no, startBlock, startBlock + numBlocks, queue->startPage);
+                dataPages += prepareRange(queue->transfers, ctrl, dataPages, settings.startBlock, settings.numBlocks, false);
                 break;
 
             case AccessPattern::SEQUENTIAL:
-                queue->startPage = i * pagesPerQueue;
-                queue->endPage = (i + 1) * pagesPerQueue;
-                totalPages = numPages;
-
-                startBlock = settings.startBlock + NVM_PAGE_TO_BLOCK(pageSize, blockSize, pagesPerQueue * i);
-                numBlocks = NVM_PAGE_TO_BLOCK(pageSize, blockSize, pagesPerQueue);
-
-                if (i + 1 == ctrl.numQueues)
+                if (i == ctrl.numQueues - 1)
                 {
-                    numBlocks = settings.numBlocks - startBlock;
+                    dataPages += prepareRange(queue->transfers, ctrl, pageOff,
+                            NVM_PAGE_TO_BLOCK(pageSize, blockSize, pageOff), settings.numBlocks - NVM_PAGE_TO_BLOCK(pageSize, blockSize, pageOff), false);
                 }
-
-                transferRange(ctrl, queue->transfers, startBlock, numBlocks, false);
-
-                fprintf(stderr, "\tQueue #%u starts at block %zu and ends at block %zu (page %zu)\n", 
-                        queue->no, startBlock, startBlock + numBlocks, queue->startPage);
+                else
+                {
+                    dataPages += prepareRange(queue->transfers, ctrl, pageOff,
+                            NVM_PAGE_TO_BLOCK(pageSize, blockSize, pageOff), NVM_PAGE_TO_BLOCK(pageSize, blockSize, pagesPerQueue), false);
+                }
                 break;
 
             case AccessPattern::RANDOM:
-                queue->startPage = i;
-                queue->endPage = ctrl.info.max_data_pages;
-                totalPages = ctrl.numQueues;
-
-                fillRandom(ctrl, queue->transfers, numBlocks, false);
-                fprintf(stderr, "\tQueue #%u random blocks (page %zu)\n", queue->no, queue->startPage);
                 break;
         }
 
         queues.push_back(queue);
     }
 
-    return totalPages;
+    return dataPages;
 }
 
 
@@ -168,32 +93,90 @@ static void benchmark(const QueueList& queues, const BufferPtr& buffer, const Se
 
 
 
-static void dumpMemory(const BufferPtr& buffer, bool ascii)
+//static void dumpMemory(const BufferPtr& buffer, bool ascii)
+//{
+//    uint8_t* ptr = (uint8_t*) buffer->vaddr;
+//    size_t byte = 0;
+//    size_t size = buffer->page_size * buffer->n_ioaddrs;
+//    while (byte < size)
+//    {
+//        fprintf(stderr, "%8lx: ", byte);
+//        for (size_t n = byte + (ascii ? 0x80 : 0x20); byte < n; ++byte)
+//        {
+//            uint8_t value = ptr[byte];
+//            if (ascii)
+//            {
+//                if ( !(0x20 <= value && value <= 0x7e) )
+//                {
+//                    value = ' ';
+//                }
+//                fprintf(stdout, "%c", value);
+//            }
+//            else
+//            {
+//                fprintf(stdout, " %02x", value);
+//            }
+//        }
+//        fprintf(stdout, "\n");
+//    }
+//}
+
+
+static void verify(const Controller& ctrl, const QueueList& queues, const BufferPtr& buffer, const Settings& settings)
 {
-    uint8_t* ptr = (uint8_t*) buffer->vaddr;
-    size_t byte = 0;
-    size_t size = buffer->page_size * buffer->n_ioaddrs;
-    while (byte < size)
+    size_t fileSize = settings.numBlocks * ctrl.ns.lba_data_size;
+
+    void* ptr = malloc(fileSize);
+    if (ptr == nullptr)
     {
-        fprintf(stderr, "%8lx: ", byte);
-        for (size_t n = byte + (ascii ? 0x80 : 0x20); byte < n; ++byte)
-        {
-            uint8_t value = ptr[byte];
-            if (ascii)
-            {
-                if ( !(0x20 <= value && value <= 0x7e) )
-                {
-                    value = ' ';
-                }
-                fprintf(stdout, "%c", value);
-            }
-            else
-            {
-                fprintf(stdout, " %02x", value);
-            }
-        }
-        fprintf(stdout, "\n");
+        throw runtime_error(string("Failed to allocate local buffer: ") + strerror(errno));
     }
+
+    FILE* fp = fopen(settings.filename, "r");
+    if (fp == nullptr)
+    {
+        free(ptr);
+        throw runtime_error(string("Failed to open file: ") + strerror(errno));
+    }
+
+    size_t actualSize = fread(ptr, 1, fileSize, fp);
+    fclose(fp);
+
+    if (actualSize != fileSize)
+    {
+        fprintf(stderr, "WARNING: Verification file differs in size!\n");
+    }
+
+    switch (settings.pattern)
+    {
+        case AccessPattern::REPEAT:
+            for (const auto& queue: queues)
+            {
+                const auto& start = *queue->transfers.begin();
+
+                if (memcmp(ptr, NVM_DMA_OFFSET(buffer, start.startPage), actualSize) != 0)
+                {
+                    free(ptr);
+                    throw runtime_error("File differs!");
+                }
+            }
+            break;
+
+        case AccessPattern::SEQUENTIAL:
+            if (memcmp(ptr, buffer->vaddr, actualSize) != 0)
+            {
+                free(ptr);
+                throw runtime_error("File differs!");
+            }
+            break;
+
+        case AccessPattern::RANDOM:
+            free(ptr);
+            throw runtime_error("Unable to verify random blocks!");
+            break;
+    }
+
+    free(ptr);
 }
 
 
@@ -239,6 +222,11 @@ int main(int argc, char** argv)
 
         benchmark(queues, buffer, settings);
 
+        if (settings.filename != nullptr && settings.pattern != AccessPattern::RANDOM)
+        {
+            verify(ctrl, queues, buffer, settings);
+        }
+
         //dumpMemory(buffer, false);
     }
     catch (const runtime_error& e)
@@ -254,77 +242,71 @@ int main(int argc, char** argv)
 
 
 
-
-
-
-static void measure(QueuePtr queue, BufferPtr buffer, Times* times, const Settings& settings, Barrier* barrier)
+static Time sendWindow(QueuePtr& queue, TransferPtr& from, const TransferPtr& to, const BufferPtr& buffer, uint32_t ns)
 {
-    // Create local copy of IO addresses
-    uint64_t ioAddresses[queue->endPage - queue->startPage];
-    for (size_t i = 0; i < (queue->endPage - queue->startPage); ++i)
-    {
-        switch (settings.pattern)
-        {
-            case AccessPattern::REPEAT:
-            case AccessPattern::SEQUENTIAL:
-                ioAddresses[i] = buffer->ioaddrs[queue->startPage + i];
-                break;
+    size_t numCommands = 0;
 
-            case AccessPattern::RANDOM:
-                ioAddresses[i] = buffer->ioaddrs[queue->startPage];
-                break;
+    // Fill up to queue depth with commands
+    for (numCommands = 0; numCommands < queue->depth && from != to; ++numCommands, ++from)
+    {
+        nvm_cmd_t* cmd = nvm_sq_enqueue(&queue->sq);
+        if (cmd == nullptr)
+        {
+            throw runtime_error(string("Queue is full, should not happen!"));
         }
+
+        const Transfer& t = *from;
+        void* prpListPtr = NVM_DMA_OFFSET(queue->sq_mem, 1 + numCommands);
+        uint64_t prpListAddr = queue->sq_mem->ioaddrs[1 + numCommands];
+        
+        nvm_cmd_header(cmd, t.write ? NVM_IO_WRITE : NVM_IO_READ, ns);
+        nvm_cmd_rw_blks(cmd, t.startBlock, t.numBlocks);
+        nvm_cmd_data(cmd, buffer->page_size, t.numPages, prpListPtr, prpListAddr, &buffer->ioaddrs[t.startPage]);
     }
 
+    // Get current time before submitting
+    auto before = std::chrono::high_resolution_clock::now();
+    nvm_sq_submit(&queue->sq);
+
+    // Wait for all completions
+    for (size_t i = 0; i < numCommands; ++i)
+    {
+        nvm_cpl_t* cpl;
+        while ((cpl = nvm_cq_dequeue(&queue->cq)) == nullptr)
+        {
+            std::this_thread::yield();
+        }
+
+        nvm_sq_update(&queue->sq);
+
+        if (!NVM_ERR_OK(cpl))
+        {
+            fprintf(stderr, "%u: %s\n", queue->no, nvm_strerror(NVM_ERR_STATUS(cpl)));
+        }
+
+        nvm_cq_update(&queue->cq);
+    }
+
+    // Get current time after all commands completed
+    auto after = std::chrono::high_resolution_clock::now();
+
+    return Time(numCommands, after - before);
+}
+
+
+
+static void measure(QueuePtr queue, const BufferPtr buffer, Times* times, const Settings& settings, Barrier* barrier)
+{
     for (size_t i = 0; i < settings.repetitions; ++i)
     {
+        TransferPtr transferPtr = queue->transfers.cbegin();
+        const TransferPtr transferEnd = queue->transfers.cend();
+
         barrier->wait();
+        
+        auto time = sendWindow(queue, transferPtr, transferEnd, buffer, settings.nvmNamespace);
 
-        auto transferIt = queue->transfers.begin();
-        auto transferEnd = queue->transfers.end();
-        size_t pageIdx = 0;
-
-        while (transferIt != transferEnd)
-        {
-            size_t n;
-            for (n = 0; n < queue->depth && transferIt != transferEnd; ++n)
-            {
-                nvm_cmd_t* cmd = nvm_sq_enqueue(&queue->sq);
-
-                nvm_cmd_header(cmd, transferIt->write ? NVM_IO_WRITE : NVM_IO_READ, settings.nvmNamespace);
-                nvm_cmd_rw_blks(cmd, transferIt->startBlock, transferIt->numBlocks);
-
-                pageIdx += nvm_cmd_data(cmd, buffer->page_size, transferIt->pages,
-                        NVM_DMA_OFFSET(queue->sq_mem, 1 + n), queue->sq_mem->ioaddrs[1 + n], ioAddresses);
-
-                ++transferIt;
-            }
-
-            auto before = std::chrono::high_resolution_clock::now();
-
-            nvm_sq_submit(&queue->sq);
-
-            for (size_t i = 0; i < n; ++i)
-            {
-                nvm_cpl_t* cpl;
-                while ((cpl = nvm_cq_dequeue(&queue->cq)) == NULL)
-                {
-                    std::this_thread::yield();
-                }
-
-                nvm_sq_update(&queue->sq);
-
-                if (!NVM_ERR_OK(cpl))
-                {
-                    fprintf(stderr, "%u: %s\n", queue->no, nvm_strerror(NVM_ERR_STATUS(cpl)));
-                }
-                nvm_cq_update(&queue->cq);
-            }
-
-            auto after = std::chrono::high_resolution_clock::now();
-            
-            times->push_back(Time(n, after - before));
-        }
+        times->push_back(time);
     }
 }
 
@@ -336,9 +318,9 @@ static void printStatistics(const QueuePtr& queue, const Times& times)
     double max = std::numeric_limits<double>::min();
     double avg = 0;
 
-    for (auto& t: times)
+    for (const auto& t: times)
     {
-        auto current = t.time.count();
+        const auto current = t.time.count();
 
         if (current < min)
         {
@@ -354,8 +336,14 @@ static void printStatistics(const QueuePtr& queue, const Times& times)
 
     avg /= times.size();
 
-    fprintf(stderr, "Queue #%u qd=%zu count=%zu min=%.1f avg=%.1f max=%.1f\n", 
-            queue->no, queue->depth, times.size(), min, avg, max);
+    size_t blocks = 0;
+    for (const auto& t: queue->transfers)
+    {
+        blocks += t.numBlocks;
+    }
+
+    fprintf(stderr, "Queue #%u qd=%zu blocks=%zu count=%zu min=%.1f avg=%.1f max=%.1f\n", 
+            queue->no,  queue->depth, blocks, times.size(), min, avg, max);
 }
 
 

@@ -27,7 +27,7 @@ static const struct option options[] = {
     { .name = "repeat", .has_arg = no_argument, .flag = nullptr, .val = AccessPattern::REPEAT },
     { .name = "sequential", .has_arg = no_argument, .flag = nullptr, .val =  AccessPattern::SEQUENTIAL },
     { .name = "random", .has_arg = no_argument, .flag = nullptr, .val = AccessPattern::RANDOM },
-    { .name = "file", .has_arg = required_argument, .flag = nullptr, .val = 'f' },
+    { .name = "verify", .has_arg = required_argument, .flag = nullptr, .val = 'v' },
     { .name = nullptr, .has_arg = no_argument, .flag = nullptr, .val = 0 }
 };
 
@@ -104,7 +104,7 @@ void Settings::parseArguments(int argc, char** argv)
     int index;
     int option;
 
-    while ((option = getopt_long(argc, argv, ":hc:g:i:a:n:o:q:d:w:r:f:", options, &index)) != -1)
+    while ((option = getopt_long(argc, argv, ":hc:g:i:a:n:o:q:d:w:r:v:", options, &index)) != -1)
     {
         switch (option)
         {
@@ -187,7 +187,7 @@ void Settings::parseArguments(int argc, char** argv)
                 repetitions = (size_t) parseNumber(optarg);
                 break;
 
-            case 'f':
+            case 'v':
                 filename = optarg;
                 break;
         }
