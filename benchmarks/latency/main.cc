@@ -252,6 +252,7 @@ int main(int argc, char** argv)
 
         if (settings.filename != nullptr && settings.pattern != AccessPattern::RANDOM)
         {
+            fprintf(stderr, "Verifying transfer...\n");
             verify(ctrl, queues, buffer, settings);
         }
 
@@ -263,6 +264,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    fprintf(stderr, "OK!\n");
     SCITerminate();
     return 0;
 }
@@ -368,7 +370,7 @@ static void measure(QueuePtr queue, const BufferPtr buffer, Times* times, const 
             times->push_back(time);
         }
 
-        flush(queue, settings.nvmNamespace);
+        //flush(queue, settings.nvmNamespace);
     }
 }
 

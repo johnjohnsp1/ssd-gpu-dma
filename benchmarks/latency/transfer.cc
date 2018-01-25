@@ -21,18 +21,16 @@ size_t prepareRange(TransferList& list, const Controller& ctrl, size_t pageOff, 
     while (page < totalPages)
     {
         size_t transferPages = std::min(ctrl.info.max_data_pages, totalPages - page);
-        size_t blocks = std::min(numBlocks, NVM_PAGE_TO_BLOCK(pageSize, blockSize, transferPages));
         
         Transfer t;
         t.write = write;
         t.startBlock = startBlock + NVM_PAGE_TO_BLOCK(pageSize, blockSize, page);
-        t.numBlocks = blocks;
+        t.numBlocks = std::min(numBlocks - t.startBlock, NVM_PAGE_TO_BLOCK(pageSize, blockSize, transferPages));
         t.startPage = pageOff + page;
         t.numPages = transferPages;
 
         list.push_back(t);
         page += transferPages;
-        numBlocks -= t.numBlocks;
     }
 
     return page;
