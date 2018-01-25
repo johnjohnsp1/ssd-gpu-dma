@@ -398,8 +398,9 @@ static void printStatistics(const QueuePtr& queue, const Times& times, size_t bl
 
     // Calculate percentiles
     std::sort(latencies.begin(), latencies.end(), std::greater<double>());
+    std::reverse(latencies.begin(), latencies.end());
 
-    for (auto p: {.95, .90, .75, .50, .25, .05})
+    for (auto p: {.99, .97, .95, .90, .75, .50, .25, .05, .01})
     {
         fprintf(stderr, "\t%4.2f: %14.3f\n", p, percentile(latencies, p));
     }
