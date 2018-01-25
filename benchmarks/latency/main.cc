@@ -362,7 +362,7 @@ static void printStatistics(const QueuePtr& queue, const Times& times)
 
         blocks += t.blocks;
 
-        double bw = (t.blocks * 512) / current;
+        double bw = (t.blocks * 512) / current; // FIXME: get true block size
 
         fprintf(stdout, "#%04x %8u %12zu %12.3f %12.3f\n",
                 queue->no, t.commands, t.blocks, current, bw);
