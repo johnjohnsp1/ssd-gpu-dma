@@ -271,7 +271,7 @@ static int execute_command(struct local_admin* admin, const nvm_cmd_t* cmd, nvm_
         // Queue was full, but we're holding the lock so no blocking
         return EAGAIN;
     }
-    
+
     // Copy command into queue slot (but keep original id)
     uint16_t in_queue_id = *NVM_CMD_CID(in_queue_cmd);
     memcpy(in_queue_cmd, cmd, sizeof(nvm_cmd_t));
@@ -290,7 +290,7 @@ static int execute_command(struct local_admin* admin, const nvm_cmd_t* cmd, nvm_
     nvm_sq_update(&admin->asq);
 
     // Copy completion and return
-    memcpy(cpl, in_queue_cpl, sizeof(nvm_cpl_t));
+    memcpy(cpl, (void*) in_queue_cpl, sizeof(nvm_cpl_t));
     *NVM_CPL_CID(cpl) = *NVM_CMD_CID(cmd);
 
     return 0;

@@ -114,7 +114,7 @@ int nvm_dis_dma_map_local(nvm_dma_t** handle,
                           bool map_va)
 {
     struct map_descriptor* md;
-    size = NVM_PAGE_ALIGN(size, ctrl->page_size);
+    size = NVM_CTRL_ALIGN(ctrl, size);
     *handle = NULL;
 
     // Create mapping descriptor
@@ -335,7 +335,7 @@ int nvm_dis_dma_create(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, uint32_t adap
 
     // Map segment for device
     struct local_memory* sd = (struct local_memory*) md->segment;
-    err = _nvm_io_map_local(&md->io_mapping, md->device.device, sd->segment, adapter);
+    err = _nvm_io_map_local_memory(&md->io_mapping, &md->device, sd, adapter);
     if (err != 0)
     {
         remove_local_segment(md);
@@ -376,8 +376,6 @@ int nvm_dis_dma_map_device(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, uint32_t 
     struct map_descriptor* md;
     *handle = NULL;
     size = NVM_CTRL_ALIGN(ctrl, size);
-    //size = NVM_PAGE_ALIGN(size, 1ULL << 16); // FIXME: mask instead
-
 
     // Create mapping descriptor
     int err = create_map_descriptor(&md, ctrl, size);
@@ -396,7 +394,7 @@ int nvm_dis_dma_map_device(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, uint32_t 
 
     // Map segment for device
     struct local_memory* sd = (struct local_memory*) md->segment;
-    err = _nvm_io_map_local(&md->io_mapping, md->device.device, sd->segment, adapter);
+    err = _nvm_io_map_local_memory(&md->io_mapping, &md->device, sd, adapter);
     if (err != 0)
     {
         remove_local_segment(md);
