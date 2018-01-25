@@ -327,19 +327,17 @@ static Time sendWindow(QueuePtr& queue, TransferPtr& from, const TransferPtr& to
 
 static void measure(QueuePtr queue, const BufferPtr buffer, Times* times, const Settings& settings, Barrier* barrier)
 {
-    const TransferPtr transferEnd = queue->transfers.cend();
-    TransferPtr transferPtr = queue->transfers.cbegin();
-
     for (size_t i = 0; i < settings.repetitions; ++i)
     {
-        if (transferPtr == transferEnd)
-        {
-            transferPtr = queue->transfers.cbegin();
-        }
-        
-        auto time = sendWindow(queue, transferPtr, transferEnd, buffer, settings.nvmNamespace, barrier);
+        const TransferPtr transferEnd = queue->transfers.cend();
+        TransferPtr transferPtr = queue->transfers.cbegin();
 
-        times->push_back(time);
+        while (transferPtr != transferEnd)
+        {
+            auto time = sendWindow(queue, transferPtr, transferEnd, buffer, settings.nvmNamespace, barrier);
+
+            times->push_back(time);
+        }
     }
 }
 
