@@ -395,8 +395,8 @@ static void printStatistics(const QueuePtr& queue, const Times& times, size_t bl
     avgLat /= times.size();
 
 
-    fprintf(stderr, "Queue #%02u qd=%zu blocks=%zu count=%zu ",
-            queue->no,  queue->depth, blocks, times.size());
+    fprintf(stderr, "Queue #%02u total-blocks=%zu count=%zu ",
+            queue->no, blocks, times.size());
     fprintf(stderr, "min=%.3f avg=%.3f max=%.3f\n", minLat, avgLat, maxLat);
 
     // Calculate percentiles
