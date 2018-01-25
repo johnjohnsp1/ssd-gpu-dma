@@ -107,7 +107,7 @@ static string helpString(const char* name)
     argInfo(s, "offset", "count", "specify start block (default is 0)");
     argInfo(s, "queues", "number", "specify number of queues (default is 1)");
     argInfo(s, "depth", "number", "specify number of commands per queue (default is 32)");
-    argInfo(s, "count", "repetitions", "number of times to repeat measurement (default is 1000)");
+    argInfo(s, "repeat", "repetitions", "number of times to repeat measurement (default is 1000)");
     argInfo(s, "gpu", "[device]", "select GPUDirect capable CUDA device (default is none)");
     argInfo(s, "verify", "path", "use file to verify transfer");
     argInfo(s, "write", "write instead of read (WARNING! Will destroy data on disk)");

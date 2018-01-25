@@ -35,7 +35,7 @@ Queue::Queue(const Controller& ctrl, uint32_t adapter, uint32_t segmentId, uint1
 
         sq_mem = createRemoteBuffer(ctrl.ctrl, adapter, no, ctrl.ctrl->page_size * (this->depth + 1));
         sqPtr = sq_mem->vaddr;
-        sqAddr = cq_mem->ioaddrs[0];
+        sqAddr = sq_mem->ioaddrs[0];
     }
     else
     {

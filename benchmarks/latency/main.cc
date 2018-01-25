@@ -370,7 +370,7 @@ static void measure(QueuePtr queue, const BufferPtr buffer, Times* times, const 
             times->push_back(time);
         }
 
-        //flush(queue, settings.nvmNamespace);
+        flush(queue, settings.nvmNamespace);
     }
 }
 
