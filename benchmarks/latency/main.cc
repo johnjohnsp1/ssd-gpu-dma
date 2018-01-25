@@ -67,22 +67,30 @@ static size_t createQueues(const Controller& ctrl, Settings& settings, QueueList
         auto queue = make_shared<Queue>(ctrl, settings.adapter, settings.segmentId++, i+1, settings.queueDepth);
         size_t pageOff = pagesPerQueue * i;
 
+        fprintf(stderr, "Queue #%02u qd=%zu ", queue->no, queue->depth);
         switch (settings.pattern)
         {
             case AccessPattern::SEQUENTIAL:
                 dataPages += prepareRange(queue->transfers, ctrl, dataPages, settings.startBlock, settings.numBlocks, write);
+                fprintf(stderr, "blocks=%zu offset=%zu pattern=sequential", settings.numBlocks, settings.startBlock);
                 break;
 
             case AccessPattern::LINEAR:
                 if (i == ctrl.numQueues - 1)
                 {
-                    dataPages += prepareRange(queue->transfers, ctrl, pageOff,
-                            NVM_PAGE_TO_BLOCK(pageSize, blockSize, pageOff), settings.numBlocks - NVM_PAGE_TO_BLOCK(pageSize, blockSize, pageOff), write);
+                    size_t startBlock = settings.startBlock + NVM_PAGE_TO_BLOCK(pageSize, blockSize, pageOff);
+                    size_t numBlocks = settings.numBlocks - startBlock;
+
+                    dataPages += prepareRange(queue->transfers, ctrl, pageOff, startBlock, numBlocks, write);
+                    fprintf(stderr, "blocks=%zu offset=%zu pattern=linear", numBlocks, startBlock);
                 }
                 else
                 {
-                    dataPages += prepareRange(queue->transfers, ctrl, pageOff,
-                            NVM_PAGE_TO_BLOCK(pageSize, blockSize, pageOff), NVM_PAGE_TO_BLOCK(pageSize, blockSize, pagesPerQueue), write);
+                    size_t startBlock = settings.startBlock + NVM_PAGE_TO_BLOCK(pageSize, blockSize, pageOff);
+                    size_t numBlocks = NVM_PAGE_TO_BLOCK(pageSize, blockSize, pagesPerQueue);
+                    
+                    dataPages += prepareRange(queue->transfers, ctrl, pageOff, startBlock, numBlocks, write);
+                    fprintf(stderr, "blocks=%zu offset=%zu pattern=linear", numBlocks, startBlock);
                 }
                 break;
 
@@ -95,10 +103,10 @@ static size_t createQueues(const Controller& ctrl, Settings& settings, QueueList
                 {
                     dataPages += prepareRange(queue->transfers, ctrl, dataPages, rand() % maxBlock, maxDataBlock, write);
                 }
+                fprintf(stderr, "blocks=%zu pattern=random", (settings.numBlocks / maxDataBlock) * maxDataBlock);
                 break;
         }
-
-        fprintf(stderr, "\tQueue #%02u: %zu commands\n", queue->no, queue->transfers.size());
+        fprintf(stderr, " (%zu commands)\n", queue->transfers.size());
 
         queues.push_back(queue);
     }
@@ -232,11 +240,8 @@ int main(int argc, char** argv)
         fprintf(stderr, "Resetting controller...\n");
         Controller ctrl(settings.controllerId, settings.adapter, settings.segmentId++, settings.nvmNamespace, settings.numQueues);
 
-        fprintf(stderr, "page size = 0x%zx, block size = 0x%zx\n", ctrl.info.page_size, ctrl.ns.lba_data_size);
-
         settings.numQueues = ctrl.numQueues;
 
-        fprintf(stderr, "Creating %u queues with depth %zu...\n", ctrl.numQueues, settings.queueDepth);
         QueueList queues;
         size_t numPages = createQueues(ctrl, settings, queues);
 
