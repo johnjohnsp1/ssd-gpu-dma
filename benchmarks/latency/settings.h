@@ -30,6 +30,7 @@ struct Settings
     const char*     filename;
     bool            write;
     bool            stats;
+    bool            remote;
 
     Settings();
     void parseArguments(int argc, char** argv);

@@ -22,7 +22,7 @@ struct Queue
     TransferList            warmups;
     TransferList            transfers;
 
-    Queue(const Controller& ctrl, uint32_t adapter, uint32_t segmentId, uint16_t no, size_t depth);
+    Queue(const Controller& ctrl, uint32_t adapter, uint32_t segmentId, uint16_t no, size_t depth, bool remote);
 };
 
 

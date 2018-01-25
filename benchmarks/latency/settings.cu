@@ -17,6 +17,7 @@ static const struct option options[] = {
     { .name = "ctrl", .has_arg = required_argument, .flag = nullptr, .val = 'c' },
     { .name = "nvm-controller", .has_arg = required_argument, .flag = nullptr, .val = 'c' },
     { .name = "controller", .has_arg = required_argument, .flag = nullptr, .val = 'c' },
+    { .name = "nc", .has_arg = required_argument, .flag = nullptr, .val = 'c' },
     { .name = "cuda-device", .has_arg = required_argument, .flag = nullptr, .val = 'g' },
     { .name = "device", .has_arg = required_argument, .flag = nullptr, .val = 'g' },
     { .name = "cuda-gpu", .has_arg = required_argument, .flag = nullptr, .val = 'g' },
@@ -30,17 +31,23 @@ static const struct option options[] = {
     { .name = "block-count", .has_arg = required_argument, .flag = nullptr, .val = 'n' },
     { .name = "blocks", .has_arg = required_argument, .flag = nullptr, .val = 'n' },
     { .name = "length", .has_arg = required_argument, .flag = nullptr, .val = 'n' },
+    { .name = "len", .has_arg = required_argument, .flag = nullptr, .val = 'n' },
+    { .name = "bc", .has_arg = required_argument, .flag = nullptr, .val = 'n' },
     { .name = "start", .has_arg = required_argument, .flag  = nullptr, .val = 'o' },
     { .name = "start-block", .has_arg = required_argument, .flag  = nullptr, .val = 'o' },
     { .name = "block-offset", .has_arg = required_argument, .flag  = nullptr, .val = 'o' },
     { .name = "offset", .has_arg = required_argument, .flag  = nullptr, .val = 'o' },
+    { .name = "offs", .has_arg = required_argument, .flag  = nullptr, .val = 'o' },
+    { .name = "sb", .has_arg = required_argument, .flag  = nullptr, .val = 'o' },
     { .name = "num-queues", .has_arg = required_argument, .flag = nullptr, .val = 'q' },
     { .name = "queue-count", .has_arg = required_argument, .flag = nullptr, .val = 'q' },
     { .name = "queues", .has_arg = required_argument, .flag = nullptr, .val = 'q' },
+    { .name = "nq", .has_arg = required_argument, .flag = nullptr, .val = 'q' },
     { .name = "queue-depth", .has_arg = required_argument, .flag = nullptr, .val = 'd' },
     { .name = "qd", .has_arg = required_argument, .flag = nullptr, .val = 'd' },
     { .name = "queue-length", .has_arg = required_argument, .flag = nullptr, .val = 'd' },
     { .name = "depth", .has_arg = required_argument, .flag = nullptr, .val = 'd' },
+    { .name = "local-sq", .has_arg = no_argument, .flag = nullptr, .val = 2 },
     { .name = "warmups", .has_arg = required_argument, .flag = nullptr, .val = 'w' },
     { .name = "repeat", .has_arg = required_argument, .flag = nullptr, .val = 'r' },
     { .name = "repetitions", .has_arg = required_argument, .flag = nullptr, .val = 'r' },
@@ -104,6 +111,7 @@ static string helpString(const char* name)
     argInfo(s, "gpu", "[device]", "select GPUDirect capable CUDA device (default is none)");
     argInfo(s, "verify", "path", "use file to verify transfer");
     argInfo(s, "write", "write instead of read (WARNING! Will destroy data on disk)");
+    argInfo(s, "local-sq", "host submission queue and PRP lists in local memory");
     argInfo(s, "stats", "print latency statistics to stdout");
     argInfo(s, "pattern", "mode", "specify access pattern (default is sequential)");
 
@@ -165,6 +173,7 @@ Settings::Settings()
     pattern = SEQUENTIAL;
     filename = nullptr;
     write = false;
+    remote = true;
 }
 
 
@@ -206,6 +215,10 @@ void Settings::parseArguments(int argc, char** argv)
 
             case 1:
                 write = true;
+                break;
+
+            case 2:
+                remote = false;
                 break;
 
             case 'h':

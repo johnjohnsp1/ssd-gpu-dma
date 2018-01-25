@@ -64,10 +64,10 @@ static size_t createQueues(const Controller& ctrl, Settings& settings, QueueList
 
     for (uint16_t i = 0; i < ctrl.numQueues; ++i)
     {
-        auto queue = make_shared<Queue>(ctrl, settings.adapter, settings.segmentId++, i+1, settings.queueDepth);
+        auto queue = make_shared<Queue>(ctrl, settings.adapter, settings.segmentId++, i+1, settings.queueDepth, settings.remote);
         size_t pageOff = pagesPerQueue * i;
 
-        fprintf(stderr, "Queue #%02u qd=%zu ", queue->no, queue->depth);
+        fprintf(stderr, "Queue #%02u %s qd=%zu ", queue->no, settings.remote ? "remote" : "local", queue->depth);
         switch (settings.pattern)
         {
             case AccessPattern::SEQUENTIAL:
@@ -330,19 +330,45 @@ static Time sendWindow(QueuePtr& queue, TransferPtr& from, const TransferPtr& to
 
 
 
+static void flush(QueuePtr& queue, uint32_t ns)
+{
+    nvm_cmd_t* cmd = nvm_sq_enqueue(&queue->sq);
+    if (cmd == nullptr)
+    {
+        throw runtime_error(string("Queue is full, should not happen!"));
+    }
+
+    nvm_cmd_header(cmd, NVM_IO_FLUSH, ns);
+    nvm_cmd_data_ptr(cmd, 0, 0);
+
+    nvm_sq_submit(&queue->sq);
+
+    nvm_cpl_t* cpl;
+    while ((cpl = nvm_cq_dequeue(&queue->cq)) == nullptr)
+    {
+        std::this_thread::yield();
+    }
+    nvm_sq_update(&queue->sq);
+    nvm_cq_update(&queue->cq);
+}
+
+
+
 static void measure(QueuePtr queue, const BufferPtr buffer, Times* times, const Settings& settings, Barrier* barrier)
 {
     for (size_t i = 0; i < settings.repetitions; ++i)
     {
         const TransferPtr transferEnd = queue->transfers.cend();
         TransferPtr transferPtr = queue->transfers.cbegin();
-
+        
         while (transferPtr != transferEnd)
         {
             auto time = sendWindow(queue, transferPtr, transferEnd, buffer, settings.nvmNamespace, barrier);
 
             times->push_back(time);
         }
+
+        flush(queue, settings.nvmNamespace);
     }
 }
 
