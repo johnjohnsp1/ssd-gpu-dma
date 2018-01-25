@@ -3,6 +3,7 @@
 #include <nvm_types.h>
 #include <nvm_cmd.h>
 #include <nvm_aq.h>
+#include <iomanip>
 #include <sstream>
 #include <string>
 #include <cstdint>
@@ -12,22 +13,45 @@ using std::string;
 
 static const struct option options[] = {
     { .name = "help", .has_arg = no_argument, .flag = nullptr, .val = 'h' },
+    { .name = "nvm-ctrl", .has_arg = required_argument, .flag = nullptr, .val = 'c' },
     { .name = "ctrl", .has_arg = required_argument, .flag = nullptr, .val = 'c' },
+    { .name = "nvm-controller", .has_arg = required_argument, .flag = nullptr, .val = 'c' },
+    { .name = "controller", .has_arg = required_argument, .flag = nullptr, .val = 'c' },
     { .name = "cuda-device", .has_arg = required_argument, .flag = nullptr, .val = 'g' },
+    { .name = "device", .has_arg = required_argument, .flag = nullptr, .val = 'g' },
+    { .name = "cuda-gpu", .has_arg = required_argument, .flag = nullptr, .val = 'g' },
     { .name = "gpu", .has_arg = required_argument, .flag = nullptr, .val = 'g' },
+    { .name = "no-gpu", .has_arg = no_argument, .flag = nullptr, .val = 'g' },
+    { .name = "nvm-namespace", .has_arg = required_argument, .flag = nullptr, .val = 'i' },
     { .name = "namespace", .has_arg = required_argument, .flag = nullptr, .val = 'i' },
+    { .name = "ns", .has_arg = required_argument, .flag = nullptr, .val = 'i' },
     { .name = "adapter", .has_arg = required_argument, .flag = nullptr, .val = 'a' },
     { .name = "num-blocks", .has_arg = required_argument, .flag = nullptr, .val = 'n' },
+    { .name = "block-count", .has_arg = required_argument, .flag = nullptr, .val = 'n' },
     { .name = "blocks", .has_arg = required_argument, .flag = nullptr, .val = 'n' },
+    { .name = "length", .has_arg = required_argument, .flag = nullptr, .val = 'n' },
+    { .name = "start", .has_arg = required_argument, .flag  = nullptr, .val = 'o' },
+    { .name = "start-block", .has_arg = required_argument, .flag  = nullptr, .val = 'o' },
+    { .name = "block-offset", .has_arg = required_argument, .flag  = nullptr, .val = 'o' },
     { .name = "offset", .has_arg = required_argument, .flag  = nullptr, .val = 'o' },
+    { .name = "num-queues", .has_arg = required_argument, .flag = nullptr, .val = 'q' },
+    { .name = "queue-count", .has_arg = required_argument, .flag = nullptr, .val = 'q' },
     { .name = "queues", .has_arg = required_argument, .flag = nullptr, .val = 'q' },
+    { .name = "queue-depth", .has_arg = required_argument, .flag = nullptr, .val = 'd' },
+    { .name = "qd", .has_arg = required_argument, .flag = nullptr, .val = 'd' },
+    { .name = "queue-length", .has_arg = required_argument, .flag = nullptr, .val = 'd' },
     { .name = "depth", .has_arg = required_argument, .flag = nullptr, .val = 'd' },
     { .name = "warmups", .has_arg = required_argument, .flag = nullptr, .val = 'w' },
+    { .name = "repeat", .has_arg = required_argument, .flag = nullptr, .val = 'r' },
     { .name = "repetitions", .has_arg = required_argument, .flag = nullptr, .val = 'r' },
-    { .name = "repeat", .has_arg = no_argument, .flag = nullptr, .val = AccessPattern::REPEAT },
-    { .name = "sequential", .has_arg = no_argument, .flag = nullptr, .val =  AccessPattern::SEQUENTIAL },
-    { .name = "random", .has_arg = no_argument, .flag = nullptr, .val = AccessPattern::RANDOM },
+    { .name = "reps", .has_arg = required_argument, .flag = nullptr, .val = 'r' },
+    { .name = "count", .has_arg = required_argument, .flag = nullptr, .val = 'r' },
     { .name = "verify", .has_arg = required_argument, .flag = nullptr, .val = 'v' },
+    { .name = "pattern", .has_arg = required_argument, .flag = nullptr, .val = 'p' },
+    { .name = "mode", .has_arg = required_argument, .flag = nullptr, .val = 'p' },
+    { .name = "write", .has_arg = no_argument, .flag = nullptr, .val = -1 },
+    { .name = "statistics", .has_arg = no_argument, .flag = nullptr, .val = 's' },
+    { .name = "stats", .has_arg = no_argument, .flag = nullptr, .val = 's' },
     { .name = nullptr, .has_arg = no_argument, .flag = nullptr, .val = 0 }
 };
 
@@ -35,15 +59,80 @@ static const struct option options[] = {
 
 static string usageString(const char* name)
 {
-    return name + string(": [-a adapter] --ctrl id [--gpu-no] --num-blocks block-count [-q queue-count] [--depth queue-depth]");
+    return name + string(": --ctrl <id> --blocks <count> [--gpu <id>] [--queues <number>] [--depth <number>] [--pattern {random|sequential|linear}]");
 }
 
+
+static void argInfo(std::ostringstream& s, const string& name, const string& argument, const string& info)
+{
+    using namespace std;
+    s << "    " << left 
+        << setw(16) << ((name.length() == 1 ? "-" : "--") + name) 
+        << setw(16) << argument
+        << setw(40) << info << endl;
+}
+
+static void modeInfo(std::ostringstream& s, const string& name, const string& info)
+{
+    using namespace std;
+    s << "    " << left 
+        << setw(16) << name
+        << setw(56) << info << endl;
+}
+
+static void argInfo(std::ostringstream& s, const string& name, const string& info)
+{
+    argInfo(s, name, "", info);
+}
 
 
 static string helpString(const char* name)
 {
-    string usage(usageString(name));
-    return usage;
+    std::ostringstream s;
+
+    s << usageString(name) << std::endl;
+    s << std::endl << "Arguments" << std::endl;
+    argInfo(s, "help", "show this help");
+    argInfo(s, "ctrl", "id", "NVM controller identifier");
+    argInfo(s, "adapter", "number", "DIS adapter number (default is 0)");
+    argInfo(s, "namespace", "id", "specify NVM namespace (default is 1)");
+    argInfo(s, "blocks", "count", "specify number of blocks");
+    argInfo(s, "offset", "count", "specify start block (default is 0)");
+    argInfo(s, "queues", "number", "specify number of queues (default is 1)");
+    argInfo(s, "depth", "number", "specify number of commands per queue (default is 32)");
+    argInfo(s, "count", "repetitions", "number of times to repeat measurement (default is 1000)");
+    argInfo(s, "gpu", "[device]", "select GPUDirect capable CUDA device (default is none)");
+    argInfo(s, "verify", "path", "use file to verify transfer");
+    argInfo(s, "write", "write instead of read (WARNING! Will destroy data on disk)");
+    argInfo(s, "stats", "print latency statistics to stdout");
+    argInfo(s, "pattern", "mode", "specify access pattern (default is sequential)");
+
+    s << std::endl;
+    s << "Access patterns:" << std::endl;
+    modeInfo(s, "sequential", "overlapping sequential access pattern, queues access same blocks");
+    modeInfo(s, "linear", "linear sequential access pattern, queues do not access same blocks");
+    modeInfo(s, "random", "random access pattern, individual commands start at a random offset");
+
+    return s.str();
+}
+
+
+static AccessPattern parsePattern(const string& s)
+{
+    if (s == "linear")
+    {
+        return AccessPattern::LINEAR;
+    }
+    else if (s == "seq" || s == "sequential")
+    {
+        return AccessPattern::SEQUENTIAL;
+    }
+    else if (s == "random")
+    {
+        return AccessPattern::RANDOM;
+    }
+
+    throw string("Invalid access pattern: " + s);
 }
 
 
@@ -67,7 +156,7 @@ Settings::Settings()
     adapter = 0;
     segmentId = 0;
     nvmNamespace = 1;
-    warmups = 10;
+    warmups = 0;
     repetitions = 1000;
     numQueues = 1;
     queueDepth = 32;
@@ -75,6 +164,7 @@ Settings::Settings()
     startBlock = 0;
     pattern = SEQUENTIAL;
     filename = nullptr;
+    write = false;
 }
 
 
@@ -104,7 +194,7 @@ void Settings::parseArguments(int argc, char** argv)
     int index;
     int option;
 
-    while ((option = getopt_long(argc, argv, ":hc:g:i:a:n:o:q:d:w:r:v:", options, &index)) != -1)
+    while ((option = getopt_long(argc, argv, ":hc:g:i:a:n:o:q:d:w:r:v:p:s", options, &index)) != -1)
     {
         switch (option)
         {
@@ -114,24 +204,33 @@ void Settings::parseArguments(int argc, char** argv)
             case ':':
                 throw string("Missing argument for option ") + argv[optind - 1];
 
+            case -1:
+                write = true;
+                break;
+
             case 'h':
                 throw helpString(argv[0]);
 
-            case AccessPattern::REPEAT:
-            case AccessPattern::SEQUENTIAL:
-            case AccessPattern::RANDOM:
-                pattern = AccessPattern(option);
+            case 'p':
+                pattern = parsePattern(optarg);
                 break;
 
             case 'c':
-                controllerId = (uint64_t) parseNumber(optarg);
+                controllerId = (uint64_t) parseNumber(optarg, 16);
                 break;
 
             case 'g':
-                cudaDevice = (int) parseNumber(optarg, 10);
-                if (cudaDevice < 0 || cudaDevice >= maxCudaDevice())
+                if (optarg != nullptr)
                 {
-                    throw string("Invalid CUDA device: ") + optarg;
+                    cudaDevice = (int) parseNumber(optarg, 10);
+                    if (cudaDevice < 0 || cudaDevice >= maxCudaDevice())
+                    {
+                        throw string("Invalid CUDA device: ") + optarg;
+                    }
+                }
+                else
+                {
+                    cudaDevice = -1;
                 }
                 break;
 
@@ -173,9 +272,9 @@ void Settings::parseArguments(int argc, char** argv)
 
             case 'd':
                 queueDepth = (size_t) parseNumber(optarg);
-                if (queueDepth < 1 || queueDepth > 64)
+                if (queueDepth < 1 || queueDepth >= 64)
                 {
-                    throw string("Invalid queue depth, must be in range 1-64");
+                    throw string("Invalid queue depth, must be in range 1-63");
                 }
                 break;
 
@@ -190,6 +289,10 @@ void Settings::parseArguments(int argc, char** argv)
             case 'v':
                 filename = optarg;
                 break;
+
+            case 's':
+                stats = true;
+                break;
         }
     }
 
@@ -200,12 +303,17 @@ void Settings::parseArguments(int argc, char** argv)
 
     if (numBlocks == 0)
     {
-        throw string("No length is specified!");
+        throw string("No block count is specified!");
     }
 
     if (pattern == AccessPattern::RANDOM && filename != nullptr)
     {
-        throw string("Can not verify random access pattern");
+        throw string("Can not verify random access pattern!");
+    }
+
+    if (write && filename != nullptr)
+    {
+        throw string("Can not write and verify!");
     }
 }
 

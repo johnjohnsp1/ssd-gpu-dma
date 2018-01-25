@@ -13,12 +13,14 @@
 #include <vector>
 #include <memory>
 #include <algorithm>
+#include <functional>
 #include <thread>
 #include <chrono>
 #include <string>
 #include <limits>
 #include <cstring>
 #include <cstdlib>
+#include <cmath>
 #include <sisci_api.h>
 
 using std::string;
@@ -58,7 +60,7 @@ static size_t createQueues(const Controller& ctrl, Settings& settings, QueueList
 
     size_t dataPages = 0;
 
-    bool write = false;
+    bool write = settings.write;
 
     for (uint16_t i = 0; i < ctrl.numQueues; ++i)
     {
@@ -67,11 +69,11 @@ static size_t createQueues(const Controller& ctrl, Settings& settings, QueueList
 
         switch (settings.pattern)
         {
-            case AccessPattern::REPEAT:
+            case AccessPattern::SEQUENTIAL:
                 dataPages += prepareRange(queue->transfers, ctrl, dataPages, settings.startBlock, settings.numBlocks, write);
                 break;
 
-            case AccessPattern::SEQUENTIAL:
+            case AccessPattern::LINEAR:
                 if (i == ctrl.numQueues - 1)
                 {
                     dataPages += prepareRange(queue->transfers, ctrl, pageOff,
@@ -105,7 +107,7 @@ static size_t createQueues(const Controller& ctrl, Settings& settings, QueueList
 }
 
 
-static void benchmark(const QueueList& queues, const BufferPtr& buffer, const Settings& settings);
+static void benchmark(const QueueList& queues, const BufferPtr& buffer, const Settings& settings, size_t blockSize);
 
 
 
@@ -142,6 +144,11 @@ static void verify(const Controller& ctrl, const QueueList& queues, const Buffer
 {
     size_t fileSize = settings.numBlocks * ctrl.ns.lba_data_size;
 
+    if (settings.write)
+    {
+        throw runtime_error("Unable to verify written data");
+    }
+
     void* ptr = malloc(fileSize);
     if (ptr == nullptr)
     {
@@ -165,7 +172,7 @@ static void verify(const Controller& ctrl, const QueueList& queues, const Buffer
 
     switch (settings.pattern)
     {
-        case AccessPattern::REPEAT:
+        case AccessPattern::SEQUENTIAL:
             for (const auto& queue: queues)
             {
                 const auto& start = *queue->transfers.begin();
@@ -178,7 +185,7 @@ static void verify(const Controller& ctrl, const QueueList& queues, const Buffer
             }
             break;
 
-        case AccessPattern::SEQUENTIAL:
+        case AccessPattern::LINEAR:
             if (memcmp(ptr, buffer->vaddr, actualSize) != 0)
             {
                 free(ptr);
@@ -236,7 +243,7 @@ int main(int argc, char** argv)
         fprintf(stderr, "Creating buffer (%zu pages)...\n", numPages);
         BufferPtr buffer = createBuffer(ctrl.ctrl, settings.adapter, settings.segmentId++, numPages * ctrl.ctrl->page_size, settings.cudaDevice);
 
-        benchmark(queues, buffer, settings);
+        benchmark(queues, buffer, settings, ctrl.ns.lba_data_size);
 
         if (settings.filename != nullptr && settings.pattern != AccessPattern::RANDOM)
         {
@@ -337,46 +344,70 @@ static void measure(QueuePtr queue, const BufferPtr buffer, Times* times, const 
 }
 
 
-
-static void printStatistics(const QueuePtr& queue, const Times& times)
+static double percentile(const std::vector<double>& values, double p)
 {
-    double min = std::numeric_limits<double>::max();
-    double max = std::numeric_limits<double>::min();
-    double avg = 0;
+    double index = ceil(p * values.size());
+    return values[index];
+}
+    
+
+
+static void printStatistics(const QueuePtr& queue, const Times& times, size_t blockSize, bool print)
+{
+    double minLat = std::numeric_limits<double>::max();
+    double maxLat = std::numeric_limits<double>::min();
+    double avgLat = 0;
+
     size_t blocks = 0;
+
+    std::vector<double> latencies;
+    latencies.reserve(times.size());
 
     for (const auto& t: times)
     {
         const auto current = t.time.count();
 
-        if (current < min)
+        if (current < minLat)
         {
-            min = current;
+            minLat = current;
         }
-        if (current > max)
+        else if (current > maxLat)
         {
-            max = current;
+            maxLat = current;
         }
 
-        avg += current;
+        avgLat += current;
+        latencies.push_back(current);
 
         blocks += t.blocks;
 
-        double bw = (t.blocks * 512) / current; // FIXME: get true block size
-
-        fprintf(stdout, "#%04x %8u %12zu %12.3f %12.3f\n",
-                queue->no, t.commands, t.blocks, current, bw);
+        if (print)
+        {
+            double bw = (t.blocks * blockSize) / current; 
+            fprintf(stdout, "#%04x %8u %12zu %12.3f %12.3f\n",
+                    queue->no, t.commands, t.blocks, current, bw);
+        }
     }
 
-    avg /= times.size();
+    avgLat /= times.size();
 
-    fprintf(stderr, "Queue #%02u qd=%zu blocks=%zu count=%zu min=%.1f avg=%.1f max=%.1f\n", 
-            queue->no,  queue->depth, blocks, times.size(), min, avg, max);
+
+    fprintf(stderr, "Queue #%02u qd=%zu blocks=%zu count=%zu ",
+            queue->no,  queue->depth, blocks, times.size());
+    fprintf(stderr, "min=%.3f avg=%.3f max=%.3f\n", minLat, avgLat, maxLat);
+
+    // Calculate percentiles
+    std::sort(latencies.begin(), latencies.end(), std::greater<double>());
+
+    for (auto p: {.95, .90, .75, .50, .25, .05})
+    {
+        fprintf(stderr, "\t%4.2f: %14.3f\n", p, percentile(latencies, p));
+    }
 }
 
 
 
-static void benchmark(const QueueList& queues, const BufferPtr& buffer, const Settings& settings)
+static void benchmark(const QueueList& queues, const BufferPtr& buffer, const Settings& settings, size_t blockSize)
 {
     Times times[queues.size()];
     thread threads[queues.size()];
@@ -394,7 +425,7 @@ static void benchmark(const QueueList& queues, const BufferPtr& buffer, const Se
     for (size_t i = 0; i < queues.size(); ++i)
     {
         threads[i].join();
-        printStatistics(queues[i], times[i]);
+        printStatistics(queues[i], times[i], blockSize, settings.stats);
     }
 }
 

@@ -7,7 +7,7 @@
 
 enum AccessPattern : int
 {
-    REPEAT,              // All threads read the same sequential chunk
+    LINEAR,              // All threads read the same sequential chunk
     SEQUENTIAL,          // All threads read the same (larger) sequential chunk with different offsets
     RANDOM               // All threads read random blocks
 };
@@ -28,6 +28,8 @@ struct Settings
     size_t          startBlock;
     AccessPattern   pattern;
     const char*     filename;
+    bool            write;
+    bool            stats;
 
     Settings();
     void parseArguments(int argc, char** argv);
