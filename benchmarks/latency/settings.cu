@@ -49,7 +49,7 @@ static const struct option options[] = {
     { .name = "verify", .has_arg = required_argument, .flag = nullptr, .val = 'v' },
     { .name = "pattern", .has_arg = required_argument, .flag = nullptr, .val = 'p' },
     { .name = "mode", .has_arg = required_argument, .flag = nullptr, .val = 'p' },
-    { .name = "write", .has_arg = no_argument, .flag = nullptr, .val = -1 },
+    { .name = "write", .has_arg = no_argument, .flag = nullptr, .val = 1 },
     { .name = "statistics", .has_arg = no_argument, .flag = nullptr, .val = 's' },
     { .name = "stats", .has_arg = no_argument, .flag = nullptr, .val = 's' },
     { .name = nullptr, .has_arg = no_argument, .flag = nullptr, .val = 0 }
@@ -204,7 +204,7 @@ void Settings::parseArguments(int argc, char** argv)
             case ':':
                 throw string("Missing argument for option ") + argv[optind - 1];
 
-            case -1:
+            case 1:
                 write = true;
                 break;
 
